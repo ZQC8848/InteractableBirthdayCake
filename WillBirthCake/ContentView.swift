@@ -16,10 +16,44 @@ struct ContentView: View {
             ARViewContainer(coordinator: coordinator)
                 .edgesIgnoringSafeArea(.all)
 
-            statusBar
-                .padding(.horizontal, 20)
-                .padding(.bottom, 40)
+            VStack(spacing: 10) {
+                statusBar
+                handDebugPanel // DEBUG: remove with HandJointDebugOverlay.swift
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 40)
         }
+    }
+
+    /// DEBUG SCAFFOLDING. Shows what the hand detector actually saw this frame.
+    /// The markers alone cannot tell you *why* a pose was rejected — this line can,
+    /// and the wrist distance separates "landmarks in the wrong place" from
+    /// "landmarks in the right place at the wrong depth".
+    @ViewBuilder
+    private var handDebugPanel: some View {
+        VStack(spacing: 6) {
+            Toggle("显示手部关节标记", isOn: Binding(
+                get: { coordinator.showHandJoints },
+                set: { coordinator.setHandJointsVisible($0) }
+            ))
+            .font(.caption.weight(.semibold))
+
+            if coordinator.showHandJoints {
+                Text(coordinator.handStatus)
+                    .font(.caption.monospaced())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(coordinator.handWristDepth.map {
+                    String(format: "手腕距相机 %.2f m", $0)
+                } ?? "手腕距相机 —")
+                    .font(.caption.monospaced())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.black.opacity(0.55), in: .rect(cornerRadius: 12))
     }
 
     @ViewBuilder

@@ -33,10 +33,18 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
     @Published private(set) var phase: Phase = .startingSession
     @Published private(set) var remainingVoxels: Int = 0
 
+    /// DEBUG: hand-landmark markers and the live readout beside them.
+    @Published var showHandJoints: Bool = true
+    @Published private(set) var handStatus: String = "—"
+    @Published private(set) var handWristDepth: Float?
+
     private weak var arView: ARView?
     private var cake: CakeEntity?
     private var explosions: ExplosionController?
     private var cakeAnchor: AnchorEntity?
+
+    /// DEBUG SCAFFOLDING — see Debug/HandJointDebugOverlay.swift.
+    private let debugOverlay = HandJointDebugOverlay()
 
     /// Serial queue for ARKit delegate callbacks. Vision runs here so a ~30 ms
     /// inference never stalls rendering.
@@ -45,9 +53,14 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
     /// Only ever touched from `visionQueue`, which ARKit serializes for us.
     nonisolated(unsafe) private let detector = HandGestureDetector()
 
-    /// Shared between the main actor (writer) and the vision queue (reader), so it
-    /// needs real synchronisation rather than an unguarded flag.
-    private let detectionEnabled = OSAllocatedUnfairLock(initialState: false)
+    /// Shared between the main actor (writer) and the vision queue (reader), so they
+    /// need real synchronisation rather than unguarded flags.
+    ///
+    /// `gestureArmed` and `debugArmed` are separate on purpose: once the cake is
+    /// placed the gesture must stop firing, but the markers should keep tracking so
+    /// the hand can still be checked against a cake that is already in the scene.
+    private let gestureArmed = OSAllocatedUnfairLock(initialState: false)
+    private let debugArmed = OSAllocatedUnfairLock(initialState: true)
     private let captureOrientation = OSAllocatedUnfairLock<CGImagePropertyOrientation>(
         initialState: .right
     )
@@ -96,7 +109,8 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
         arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
 
         updateCaptureOrientation()
-        detectionEnabled.withLock { $0 = true }
+        debugOverlay.attach(to: arView.scene) // DEBUG:
+        gestureArmed.withLock { $0 = true }
         phase = .searchingForPalm
     }
 
@@ -117,7 +131,7 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
     private func placeCake(at position: SIMD3<Float>) {
         guard let arView, let cake, cakeAnchor == nil else { return }
 
-        detectionEnabled.withLock { $0 = false }
+        gestureArmed.withLock { $0 = false }
 
         let anchor = AnchorEntity(world: position)
         anchor.addChild(cake)
@@ -154,8 +168,20 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
         remainingVoxels = fresh.destructibleVoxelCount
 
         detector.reset()
-        detectionEnabled.withLock { $0 = true }
+        gestureArmed.withLock { $0 = true }
         phase = .searchingForPalm
+    }
+
+    /// DEBUG: mirrors the SwiftUI toggle into the vision queue and the scene.
+    func setHandJointsVisible(_ visible: Bool) {
+        showHandJoints = visible
+        debugArmed.withLock { $0 = visible }
+        debugOverlay.isHidden = !visible
+        if !visible {
+            debugOverlay.clear()
+            handStatus = "—"
+            handWristDepth = nil
+        }
     }
 }
 
@@ -165,14 +191,30 @@ extension ARCakeCoordinator: ARSessionDelegate {
 
     /// Called on `visionQueue`, never the main actor.
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        guard detectionEnabled.withLock({ $0 }) else { return }
+        let wantsGesture = gestureArmed.withLock { $0 }
+        let wantsMarkers = debugArmed.withLock { $0 } // DEBUG:
+
+        // Keep running while *either* consumer wants frames: after the cake is placed
+        // the gesture is disarmed but the markers should still track. DEBUG:
+        guard wantsGesture || wantsMarkers else { return }
         let orientation = captureOrientation.withLock { $0 }
 
-        guard let detection = detector.process(frame: frame, orientation: orientation) else {
-            return
-        }
+        // A nil result means the frame was skipped by `frameStride`, not that the
+        // hand is gone — leave the display alone rather than flickering the markers.
+        guard let result = detector.process(
+            frame: frame,
+            orientation: orientation,
+            includeAllJoints: wantsMarkers // DEBUG:
+        ) else { return }
 
         Task { @MainActor in
+            if wantsMarkers { // DEBUG:
+                self.debugOverlay.update(positions: result.joints)
+                self.handStatus = result.status.debugSummary
+                self.handWristDepth = result.wristDepth
+            }
+
+            guard wantsGesture, let detection = result.detection else { return }
             // The gesture may have already fired while this hop was in flight.
             guard self.cakeAnchor == nil else { return }
             self.placeCake(at: detection.palmCentre)

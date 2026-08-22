@@ -16,9 +16,27 @@
 
 ## 下一步
 
-**在真机上跑起来，先只验证手势那一段。** 具体做法：在 `ARCakeCoordinator` 的 `placeCake(at:)` 之外，先加一个临时的调试可视化——把 `HandGestureDetector` 反投影出的三个关键点（手腕、食指根、小指根）各放一个小球在世界坐标里，看它们是不是真的贴在手上。
+**在真机上跑起来，先只看手部标记那一段。** 调试脚手架已经写好了（见下方"临时调试脚手架"），app 一启动默认就开着。
 
-这么做的理由：[architecture.md](architecture.md) 里列的头两条未验证项（Vision 方向映射、掌心法线符号）**都属于"算错了也会得到看起来合理的结果"**的那类 bug。如果直接看蛋糕生成得对不对，蛋糕出现在错误位置时你分不清是方向映射错了、法线符号错了、深度采样错了，还是阈值不合适。先把中间量画出来，一眼就能定位。
+看什么：
+
+1. **21 个小球是不是贴在真实的手指关节上。** 骨骼连线会把它们连成手的形状——如果连出来的手是镜像的（红色拇指跑到小指那侧）或者整体转了 90°，那就是 `HandGestureDetector.nativeNormalizedPoint(from:orientation:)` 的方向映射写错了。这是最可能出问题的一处。
+2. **"手腕距相机"读数**是否和实际距离相符。如果小球在画面上的位置对、但整体浮在手的前面或后面，那是深度采样的问题，不是方向映射的问题——这两者从蛋糕最终位置上完全分不出来。
+3. **状态行说的拒绝原因。** 把手摆成张开朝上却没触发时，它会直接告诉你卡在哪一步（手指没伸直 / 倾角超阈值多少度 / 取不到深度 / 置信度不够），而不用靠猜。倾角那条会连实测角度一起给出，可以直接拿来定 `maxTiltFromUpDegrees` 该放宽到多少。
+
+这么做的理由：[architecture.md](architecture.md) 里列的头两条未验证项（Vision 方向映射、掌心法线符号）**都属于"算错了也会得到看起来合理的结果"**的那类 bug。直接看蛋糕生成得对不对的话，蛋糕出现在错误位置时你分不清是方向映射、法线符号、深度采样还是阈值的问题。
+
+## 临时调试脚手架（验证完就删）
+
+手部关节标记 + 状态读数，仅用于上面这轮验证。
+
+**删除方法**：
+1. 删掉 `WillBirthCake/Debug/HandJointDebugOverlay.swift` 整个文件
+2. 删掉 `ARCakeCoordinator.swift` 里所有标了 `// DEBUG:` 的行，以及 `debugOverlay` / `debugArmed` / `showHandJoints` / `handStatus` / `handWristDepth` / `setHandJointsVisible(_:)` 这些成员
+3. 删掉 `ContentView.swift` 里的 `handDebugPanel`
+4. `HandGestureDetector.swift` 里：`process` 的 `includeAllJoints` 参数、`HandFrameResult` 的 `joints` 和 `wristDepth` 字段、以及整个 `HandPoseStatus` 枚举
+
+注意 `gestureArmed` 和 `debugArmed` 是**故意拆成两个**的：蛋糕放置后手势要停止触发，但标记要继续跟踪，这样才能对着已经放好的蛋糕继续检查手部识别。删除脚手架时把 `debugArmed` 一并去掉，`session(_:didUpdate:)` 就退回只由 `gestureArmed` 控制。
 
 ## 进行中 / 待定
 
