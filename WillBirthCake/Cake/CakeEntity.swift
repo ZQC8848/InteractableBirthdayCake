@@ -204,9 +204,15 @@ final class CakeEntity: Entity {
         )
         guard let mesh else { return }
         textRoot.addChild(ModelEntity(mesh: mesh, materials: Self.textMaterials))
+        textRoot.addChild(Self.makeGlowLight(originOffset: originOffset, voxelSize: voxelSize))
     }
 
     /// One variant per face tier, matching how the cake is shaded.
+    ///
+    /// Emissive makes the letters self-lit, so they stay bright inside a cavity the
+    /// spot light never reaches. Note this is *not* bloom: RealityKit has no bloom,
+    /// and emissive alone produces no halo — it only makes the surface render bright.
+    /// The sense of glow comes from the light below.
     private static let textMaterials: [RealityKit.Material] = {
         let colour = VoxelTextLayout.colour
         return FaceShadingTier.allCases
@@ -220,10 +226,55 @@ final class CakeEntity: Entity {
                     alpha: 1
                 ))
                 material.roughness = 0.35
-                material.metallic = 0.7
+                material.metallic = 0.0
+
+                // Face tiers are compressed to a quarter of their strength for the
+                // emissive channel: a self-luminous surface really is flatter than a
+                // reflective one, but flattening it completely loses the block edges
+                // that make the letters read as voxels.
+                let glow = 1 - (1 - tier.brightness) * 0.25
+                material.emissiveColor = .init(color: UIColor(
+                    red: CGFloat(colour.r * glow),
+                    green: CGFloat(colour.g * glow),
+                    blue: CGFloat(colour.b * glow),
+                    alpha: 1
+                ))
+                material.emissiveIntensity = 2.5
                 return material
             }
     }()
+
+    /// A small light inside the message.
+    ///
+    /// This is what actually sells the glow, and it works because of how the text is
+    /// seen: through a blasted cavity, surrounded by cake walls. Those walls face
+    /// inward, so a light at the centre lights them and reads as the message glowing
+    /// from within. The cake's *outer* shell faces away from it and stays unlit, which
+    /// is why no shadow casting is needed to stop the glow leaking through the cake.
+    ///
+    /// Intensity is anchored on the one measured value in this project — the 5500
+    /// lumen spot at roughly 0.5 m — scaled for a light a few centimetres from what it
+    /// lights and for a point light spreading over the full sphere rather than a cone.
+    /// That makes it an estimate, not a derivation; adjust by eye.
+    private static func makeGlowLight(
+        originOffset: SIMD3<Float>,
+        voxelSize: Float
+    ) -> Entity {
+        let centre = VoxelTextLayout.glowCentre
+        let colour = VoxelTextLayout.colour
+
+        let light = PointLight()
+        light.light.color = UIColor(
+            red: CGFloat(colour.r), green: CGFloat(colour.g), blue: CGFloat(colour.b), alpha: 1
+        )
+        light.light.intensity = 300
+        // Kept to roughly the cake's own size so the glow dies out at its surface
+        // instead of spilling onto whatever the cake is sitting on.
+        light.light.attenuationRadius = 0.2
+        light.position =
+            (SIMD3<Float>(centre.x, centre.y, centre.z) - originOffset) * voxelSize
+        return light
+    }
 
     // MARK: - Interaction
 

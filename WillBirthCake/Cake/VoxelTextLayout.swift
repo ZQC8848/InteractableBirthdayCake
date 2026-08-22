@@ -49,7 +49,17 @@ nonisolated enum VoxelTextLayout {
     /// turn this face toward the viewer.
     static let planeZ: Float = 0
 
-    static let colour = (r: Float(0.98), g: Float(0.82), b: Float(0.25))
+    /// Warm white rather than gold. The text is emissive and seen against pink cake
+    /// from inside a dark cavity, where a near-white glow separates far harder than a
+    /// saturated colour does — a gold that is already close to the frosting's warmth
+    /// reads as "lit cake" instead of "lit letters".
+    static let colour = (r: Float(1.0), g: Float(0.94), b: Float(0.82))
+
+    /// Where the glow light sits, in the cake's continuous grid coordinates: the
+    /// middle of the block, on its plane.
+    static var glowCentre: (x: Float, y: Float, z: Float) {
+        (x: 0, y: topY - Float(blockHeight) * scale / 2, z: planeZ + 0.5)
+    }
 
     // MARK: - Font
 
