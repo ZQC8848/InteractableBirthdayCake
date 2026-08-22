@@ -189,5 +189,63 @@ check("a blast large enough to clear the whole cake leaves no voxels",
 check("...and the text is untouched because it was never in the grid",
       VoxelTextLayout.cells.count == cells.count)
 
+// Exposure drives the celebration message, so it has to mean "readable", not
+// "the voxel at that spot is gone". A cell whose own voxel was blasted away can
+// still sit behind untouched cake.
+print("\n== text exposure ==")
+
+let exposureGrid = VoxelGrid(voxels: allVoxels, voxelSize: voxelSize)
+let sealed = VoxelTextLayout.exposedFraction(in: exposureGrid)
+check("an untouched cake exposes nothing", sealed == 0,
+      String(format: "%.1f%%", sealed * 100))
+
+// Simulating what a player actually does matters here. A blast centred *on* the
+// text plane still exposes nothing, because a radius of 6.4 cannot reach from the
+// plane out through 12 voxels of cake — and in the app the blast is never centred
+// there anyway: the ray stops at the first solid voxel, i.e. the surface. Reaching
+// the message takes repeated taps, each starting from the new surface the last one
+// left behind.
+let textPlane = Int(VoxelTextLayout.planeZ)
+let aimHeight = VoxelTextLayout.topY - Float(VoxelTextLayout.blockHeight) * VoxelTextLayout.scale / 2
+let sim = VoxelGrid(voxels: allVoxels, voxelSize: voxelSize)
+
+// Aim points spread over the text block, the way someone would work across it.
+let aimPoints: [(Float, Float)] = [
+    (0, aimHeight), (0, aimHeight), (0, aimHeight),
+    (-5, aimHeight), (5, aimHeight),
+    (-5, aimHeight - 3), (5, aimHeight - 3),
+    (0, aimHeight + 3), (-7, aimHeight), (7, aimHeight),
+    (0, aimHeight - 4), (0, aimHeight + 4),
+]
+
+var exposure: Float = 0
+var tapsToThreshold: Int?
+var neverDropped = true
+for (index, aim) in aimPoints.enumerated() {
+    let target = sim.localCentre(of: VoxelCoord(Int(aim.0), Int(aim.1), textPlane))
+    // From well in front of the cake — its +Z is yawed toward the viewer.
+    let eye = target + SIMD3<Float>(0, 0, 0.4)
+    guard let hit = sim.firstSolidVoxel(rayOrigin: eye, direction: target - eye) else { continue }
+    sim.removeSphere(centre: hit, radius: 6.4)
+
+    let now = VoxelTextLayout.exposedFraction(in: sim)
+    if now < exposure { neverDropped = false }
+    exposure = now
+    print(String(format: "  info  tap %2d at (%.0f, %.0f): %.1f%% exposed",
+                 index + 1, aim.0, aim.1, exposure * 100))
+    if exposure >= 0.8, tapsToThreshold == nil { tapsToThreshold = index + 1 }
+}
+
+check("blasting never reduces exposure", neverDropped)
+check("repeated taps reach the 80% celebration threshold",
+      tapsToThreshold != nil,
+      tapsToThreshold.map { "took \($0) taps" } ?? "never reached, peaked at \(Int(exposure * 100))%")
+
+let cleared = VoxelGrid(voxels: allVoxels, voxelSize: voxelSize)
+cleared.removeSphere(centre: VoxelCoord(0, 10, 0), radius: 100)
+check("a cleared cake exposes everything",
+      VoxelTextLayout.exposedFraction(in: cleared) == 1.0,
+      String(format: "%.1f%%", VoxelTextLayout.exposedFraction(in: cleared) * 100))
+
 print("\n\(failures == 0 ? "ALL CHECKS PASSED" : "\(failures) CHECK(S) FAILED")")
 exit(failures == 0 ? 0 : 1)

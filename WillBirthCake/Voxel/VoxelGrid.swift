@@ -16,7 +16,10 @@ import simd
 
 // MARK: - Coordinates
 
-struct VoxelCoord: Hashable {
+/// `nonisolated`, like everything else in this file: these are plain data with no
+/// actor affinity, and the target's default main-actor isolation would otherwise
+/// make them unusable from the vision queue and from Tools/VerifyVoxelLogic.
+nonisolated struct VoxelCoord: Hashable {
     var x: Int
     var y: Int
     var z: Int
@@ -43,20 +46,20 @@ struct VoxelCoord: Hashable {
 
 /// Chunk-space coordinate. Same layout as `VoxelCoord`, kept distinct so the two
 /// cannot be mixed up at a call site.
-struct ChunkCoord: Hashable {
+nonisolated struct ChunkCoord: Hashable {
     var x: Int
     var y: Int
     var z: Int
 }
 
-struct Voxel {
+nonisolated struct Voxel {
     let coord: VoxelCoord
     let materialID: Int
 }
 
 // MARK: - Grid
 
-final class VoxelGrid {
+nonisolated final class VoxelGrid {
     /// Voxels per chunk edge. Chunks are the unit of mesh rebuilding, so this
     /// trades rebuild cost (smaller is cheaper) against draw calls (larger is fewer).
     static let chunkSize = 8
@@ -178,6 +181,34 @@ final class VoxelGrid {
         }
 
         return (removed, dirtyChunks)
+    }
+
+    /// Whether a straight path along +Z or −Z from `coord` reaches outside the model
+    /// without meeting a voxel.
+    ///
+    /// This is the test for "could something at this coordinate be seen", as opposed
+    /// to the much weaker "is this coordinate empty". A text cell whose own voxel has
+    /// been blasted away can still be completely hidden behind cake in front of it,
+    /// and counting that as revealed would declare the message readable while it is
+    /// still buried.
+    ///
+    /// ±Z because that is the text slab's normal: the cake is yawed so its +Z faces
+    /// the viewer. Both directions count, since a hole punched through the far side
+    /// exposes the message just as well to anyone who walks around.
+    func isExposedAlongZ(_ coord: VoxelCoord) -> Bool {
+        for step in [1, -1] {
+            var z = coord.z
+            var blocked = false
+            while z >= minCoord.z && z <= maxCoord.z {
+                if isOccupied(VoxelCoord(coord.x, coord.y, z)) {
+                    blocked = true
+                    break
+                }
+                z += step
+            }
+            if !blocked { return true }
+        }
+        return false
     }
 
     // MARK: Ray marching

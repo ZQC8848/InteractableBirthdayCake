@@ -104,12 +104,24 @@ struct ContentView: View {
 
         case .cakePlaced:
             VStack(spacing: 12) {
-                hint("Tap the cake to blow it open and see what's inside")
+                if coordinator.textExposure >= ARCakeCoordinator.celebrationThreshold {
+                    Text("Happy Birthday Will!")
+                        .font(.title2.weight(.bold))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 22)
+                        .padding(.vertical, 14)
+                        .background(.black.opacity(0.55), in: .rect(cornerRadius: 16))
+                        .transition(.scale(scale: 0.85).combined(with: .opacity))
+                } else {
+                    hint("Tap the cake to blow it open and see what's inside")
+                }
                 Button("Place Again") { coordinator.reset() }
                     .buttonStyle(.borderedProminent)
                     .tint(.white.opacity(0.9))
                     .foregroundStyle(.black)
             }
+            .animation(.snappy(duration: 0.35), value: coordinator.textExposure)
         }
     }
 

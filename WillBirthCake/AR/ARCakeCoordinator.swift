@@ -33,6 +33,15 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
     @Published private(set) var phase: Phase = .startingSession
     @Published private(set) var remainingVoxels: Int = 0
 
+    /// Fraction of the hidden message visible from outside, 0...1.
+    @Published private(set) var textExposure: Float = 0
+
+    /// How much of the message has to be uncovered before the app says it out loud.
+    /// Short of 1 because the outermost cells sit deepest in the tapering cake and
+    /// take a disproportionate number of taps — waiting for every last one would
+    /// leave the payoff feeling withheld after the message is plainly readable.
+    static let celebrationThreshold: Float = 0.8
+
     /// DEBUG: hand-landmark markers and the live readout beside them. Off by
     /// default — the panel is opened deliberately, not left running.
     @Published var showHandJoints: Bool = false
@@ -201,6 +210,8 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
         let destroyed = explosions.fireRay(origin: ray.origin, direction: ray.direction)
         if destroyed > 0 {
             remainingVoxels = cake?.remainingVoxelCount ?? 0
+            // Only after a blast: nothing else can change how much is covered.
+            textExposure = cake?.textExposure ?? 0
         }
     }
 
@@ -219,6 +230,7 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
         guard let fresh = try? CakeEntity(scene: data) else { return }
         cake = fresh
         remainingVoxels = fresh.remainingVoxelCount
+        textExposure = 0
 
         detector.reset()
         gestureArmed.withLock { $0 = true }

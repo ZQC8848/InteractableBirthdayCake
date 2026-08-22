@@ -328,4 +328,9 @@ final class CakeEntity: Entity {
     var remainingVoxelCount: Int {
         grid.voxels.count
     }
+
+    /// Fraction of the hidden message now visible from outside, 0...1.
+    var textExposure: Float {
+        VoxelTextLayout.exposedFraction(in: grid)
+    }
 }

@@ -84,6 +84,21 @@
 - **面向明暗的四档系数**（1.0 / 0.80 / 0.66 / 0.50）是初值，实机看层次够不够。
 - **蛋糕物理尺寸** 16.3 × 14.3 × 16.3 cm（`voxelSize = 0.0065`）在掌心里看着合不合适。
 
+## 文字暴露度与结束提示
+
+文字被挖出 80% 以上时，底部提示切换成 "Happy Birthday Will!"（阈值 `ARCakeCoordinator.celebrationThreshold`）。
+
+判定标准是**「能不能被看到」而不是「那个位置的体素没了」**——文字体素所在的格子被挖空，前面完全可能还挡着一层蛋糕。`VoxelGrid.isExposedAlongZ` 沿 ±Z（文字平面的法线，也是蛋糕朝向使用者的方向）直线步进，能走出模型边界才算暴露；两个方向都算，因为从背面打穿一样能看见。
+
+实测的节奏（`Tools/VerifyVoxelLogic` 会模拟真实点击并打印）：
+
+- **第 1 次点击 0%** ——射线停在表面，半径 6.4 的球从表面往里只能挖到 z≈4.6，够不到 z=0 的文字平面
+- **第 2 次 44.7%** ——在同一处再打一次才穿透
+- **第 3 次 62.5%**
+- 之后必须**换位置**才有增长，在整个文字区域上均匀开洞，第 9 次到 82.9%
+
+也就是说 80% 这个阈值要求玩家把整段文字都清出来，而不是在一个点上猛戳。想让它更早触发就调低阈值——62.5% 的时候中间部分其实已经能读了。
+
 ## 相关决策
 
 见 [decisions/](decisions/)：[仅 LiDAR 机型](decisions/device-scope-lidar-only.md)、[JSON 数据格式](decisions/voxel-data-format-json.md)、[真实物理爆炸](decisions/explosion-physics-real.md)、[RealityKit 渲染](decisions/render-engine-realitykit.md)、[射线步进命中检测](decisions/hit-testing-by-ray-marching.md)。其中设备范围那条已经从「仅 LiDAR」改为降级链，原文档内标了 superseded。

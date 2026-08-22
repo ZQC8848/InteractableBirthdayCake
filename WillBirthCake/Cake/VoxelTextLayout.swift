@@ -137,6 +137,23 @@ nonisolated enum VoxelTextLayout {
         -Float(blockWidth) * scale / 2
     }
 
+    /// Fraction of the message that can be seen from outside the cake, 0...1.
+    ///
+    /// Lives here rather than on the grid because the grid has no idea the text
+    /// exists — the text is not made of its voxels. Keeping it in this file also
+    /// keeps it inside what Tools/VerifyVoxelLogic can compile and check.
+    static func exposedFraction(in grid: VoxelGrid) -> Float {
+        let all = cells
+        guard !all.isEmpty else { return 0 }
+        let exposed = all.count { cell in
+            let centre = gridCentre(of: cell)
+            return grid.isExposedAlongZ(VoxelCoord(
+                Int(floor(centre.x)), Int(floor(centre.y)), Int(floor(centre.z))
+            ))
+        }
+        return Float(exposed) / Float(all.count)
+    }
+
     /// Centre of a cell, in the cake's continuous grid coordinates. This is the
     /// bridge between text space and cake space, and the one thing the containment
     /// check in Tools/VerifyVoxelLogic exercises.
