@@ -170,6 +170,8 @@ extension HandPoseStatus {
             return "No hand detected"
         case .landmarksBelowConfidence:
             return "Landmark confidence too low"
+        case .fingersNotExtended:
+            return "Fingers not extended"
         case .noDepthAtLandmarks:
             return "No depth at landmarks"
         case .holding(let seconds, let landmarks):

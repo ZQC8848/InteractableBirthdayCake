@@ -4,8 +4,8 @@
 //
 //  Locates the centre of a hand's palm in world space.
 //
-//  There is no pose test any more — no palm-up check, no finger-extension check.
-//  Seeing a hand with usable depth is the whole trigger.
+//  The only pose test is that the hand is open: five extended fingers. Which way the
+//  palm faces is not checked.
 //
 //  iOS has no native hand-skeleton API — ARKit's hand tracking is visionOS only —
 //  so this runs Vision's 2D hand pose request over the AR frame and lifts the
@@ -38,6 +38,7 @@ struct HandDetection {
 enum HandPoseStatus: Equatable {
     case noHandVisible
     case landmarksBelowConfidence
+    case fingersNotExtended
     /// Vision found the landmarks but the depth map had nothing usable there.
     case noDepthAtLandmarks
     /// Palm located and the hold timer is running. Carries elapsed seconds.
@@ -67,6 +68,10 @@ nonisolated final class HandGestureDetector {
     enum Tuning {
         /// Vision confidence floor for an individual joint.
         static let minJointConfidence: Float = 0.3
+        /// A finger counts as extended when its tip is at least this many times
+        /// further from the wrist than its middle joint. A curled finger folds the
+        /// tip back toward the palm, so the ratio drops below 1.
+        static let extensionRatio: Float = 1.05
         /// Fewest palm landmarks that must reproject before a centre is trusted.
         /// One point is a single depth sample and lands wherever that sample is
         /// wrong; two already average most of it out.
@@ -222,10 +227,10 @@ nonisolated final class HandGestureDetector {
         orientation: CGImagePropertyOrientation
     ) -> PoseEvaluation {
 
-        // No pose test: any hand whose palm can be located counts. Whatever subset
-        // of the palm landmarks Vision is confident about and depth can resolve gets
-        // averaged, rather than insisting on a fixed three — a finger crossing the
-        // wrist or a stray depth hole should not cost a detection.
+        // Whatever subset of the palm landmarks Vision is confident about and depth
+        // can resolve gets averaged, rather than insisting on a fixed three — a
+        // finger crossing the wrist or a stray depth hole should not cost a
+        // detection.
         let confident = Self.palmJoints.compactMap { name -> VNRecognizedPoint? in
             guard let point = points[name],
                   point.confidence >= Tuning.minJointConfidence else { return nil }
@@ -233,6 +238,14 @@ nonisolated final class HandGestureDetector {
         }
         guard confident.count >= Tuning.minPalmLandmarks else {
             return .rejected(.landmarksBelowConfidence)
+        }
+
+        // Checked before reprojection: it is pure 2D arithmetic, while reprojection
+        // costs a depth sample per landmark.
+        switch fingersExtended(points: points) {
+        case .some(false): return .rejected(.fingersNotExtended)
+        case .none: return .rejected(.landmarksBelowConfidence)
+        case .some(true): break
         }
 
         let positions = confident.compactMap {
@@ -246,6 +259,45 @@ nonisolated final class HandGestureDetector {
         return .accepted(
             HandDetection(palmCentre: centre, landmarkCount: positions.count)
         )
+    }
+
+    /// Whether all five fingers read as straight, measured by distance from the
+    /// wrist: on an extended finger the tip is clearly further out than the middle
+    /// joint, while a curled one folds the tip back toward the palm.
+    ///
+    /// - Returns: `nil` when a joint is missing or below confidence, i.e. "cannot
+    ///   tell" — kept distinct from `false` so the debug readout does not report a
+    ///   partly occluded hand as a closed one.
+    private func fingersExtended(
+        points: [VNHumanHandPoseObservation.JointName: VNRecognizedPoint]
+    ) -> Bool? {
+        guard let wrist = points[.wrist], wrist.confidence >= Tuning.minJointConfidence else {
+            return nil
+        }
+
+        let fingers: [(tip: VNHumanHandPoseObservation.JointName,
+                       middle: VNHumanHandPoseObservation.JointName)] = [
+            (.thumbTip, .thumbMP),
+            (.indexTip, .indexPIP),
+            (.middleTip, .middlePIP),
+            (.ringTip, .ringPIP),
+            (.littleTip, .littlePIP),
+        ]
+
+        for finger in fingers {
+            guard let tip = points[finger.tip], tip.confidence >= Tuning.minJointConfidence,
+                  let middle = points[finger.middle],
+                  middle.confidence >= Tuning.minJointConfidence
+            else { return nil }
+
+            let tipDistance = hypot(tip.location.x - wrist.location.x,
+                                    tip.location.y - wrist.location.y)
+            let middleDistance = hypot(middle.location.x - wrist.location.x,
+                                       middle.location.y - wrist.location.y)
+            guard middleDistance > 1e-5 else { return nil }
+            if Float(tipDistance / middleDistance) < Tuning.extensionRatio { return false }
+        }
+        return true
     }
 
     // MARK: - 2D → 3D
