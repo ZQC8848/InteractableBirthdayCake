@@ -32,7 +32,7 @@ struct ContentView: View {
     @ViewBuilder
     private var handDebugPanel: some View {
         VStack(spacing: 6) {
-            Toggle("显示手部关节标记", isOn: Binding(
+            Toggle("Show hand joint markers", isOn: Binding(
                 get: { coordinator.showHandJoints },
                 set: { coordinator.setHandJointsVisible($0) }
             ))
@@ -44,12 +44,12 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 Text(coordinator.handWristDepth.map {
-                    String(format: "手腕距相机 %.2f m", $0)
-                } ?? "手腕距相机 —")
+                    String(format: "Wrist %.2f m from camera", $0)
+                } ?? "Wrist — from camera")
                     .font(.caption.monospaced())
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                Text("深度来源：\(coordinator.depthSourceName)")
+                Text("Depth source: \(coordinator.depthSourceName)")
                     .font(.caption.monospaced())
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -64,21 +64,21 @@ struct ContentView: View {
     private var statusBar: some View {
         switch coordinator.phase {
         case .startingSession:
-            hint("正在启动 AR…")
+            hint("Starting AR…")
 
         case .unsupportedDevice:
-            hint("这台设备不支持所需的 AR 深度功能。\n需要 A12 及以上芯片（iPhone XS 起）。")
+            hint("This device lacks the AR depth support this needs.\nRequires an A12 chip or later (iPhone XS and up).")
 
         case .loadFailed(let message):
-            hint("蛋糕数据加载失败：\n\(message)")
+            hint("Could not load the cake data:\n\(message)")
 
         case .searchingForPalm:
-            hint("张开手掌、掌心朝上，稳住不动")
+            hint("Open your hand, palm up, and hold still")
 
         case .cakePlaced:
             VStack(spacing: 12) {
-                hint("点击蛋糕把它炸开，看看里面藏了什么")
-                Button("重新放置") { coordinator.reset() }
+                hint("Tap the cake to blow it open and see what's inside")
+                Button("Place Again") { coordinator.reset() }
                     .buttonStyle(.borderedProminent)
                     .tint(.white.opacity(0.9))
                     .foregroundStyle(.black)

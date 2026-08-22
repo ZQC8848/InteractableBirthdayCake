@@ -112,7 +112,8 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
             return
         }
         depthSourceName = configuration.frameSemantics
-            .contains(.personSegmentationWithDepth) ? "估算深度(人体分割)" : "LiDAR" // DEBUG:
+            .contains(.personSegmentationWithDepth)
+            ? "Estimated (person segmentation)" : "LiDAR" // DEBUG:
 
         arView.session.delegateQueue = visionQueue
         arView.session.delegate = self

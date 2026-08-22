@@ -167,21 +167,21 @@ extension HandPoseStatus {
     var debugSummary: String {
         switch self {
         case .noHandVisible:
-            return "没看到手"
+            return "No hand detected"
         case .landmarksBelowConfidence:
-            return "关键点置信度不足"
+            return "Landmark confidence too low"
         case .fingersNotExtended:
-            return "手指没有伸直"
+            return "Fingers not extended"
         case .noDepthAtLandmarks:
-            return "关键点处取不到深度（LiDAR 没覆盖到？）"
+            return "No depth at landmarks"
         case .tooTilted(let degrees):
-            return String(format: "掌心偏离朝上 %.0f°（阈值 %.0f°）",
+            return String(format: "Palm %.0f° off vertical (limit %.0f°)",
                           degrees, HandGestureDetector.Tuning.maxTiltFromUpDegrees)
         case .holding(let seconds, let degrees):
-            return String(format: "保持中 %.1f/%.1fs · 倾角 %.0f°",
+            return String(format: "Holding %.1f/%.1fs · tilt %.0f°",
                           seconds, HandGestureDetector.Tuning.requiredHoldDuration, degrees)
         case .fired(let degrees):
-            return String(format: "已触发 · 倾角 %.0f°", degrees)
+            return String(format: "Fired · tilt %.0f°", degrees)
         }
     }
 }

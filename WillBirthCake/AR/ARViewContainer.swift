@@ -21,6 +21,14 @@ struct ARViewContainer: UIViewRepresentable {
     func makeUIView(context: Context) -> ARView {
         let arView = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
 
+        // The session asks for `personSegmentationWithDepth` because that is the only
+        // way to get depth for a hand on a device without LiDAR. ARView otherwise
+        // takes that frame semantic as a cue to composite people *in front of* the
+        // scene, which would let a hand cover the cake. The depth is wanted; the
+        // occlusion is not, so it is turned off here rather than by giving up the
+        // frame semantic.
+        arView.renderOptions.insert(.disablePersonOcclusion)
+
         let tap = UITapGestureRecognizer(
             target: context.coordinator,
             action: #selector(TapForwarder.handleTap(_:))

@@ -56,6 +56,6 @@ nonisolated struct HandDepthSource {
     /// DEBUG: shown in the on-screen readout so it is obvious on a device which path
     /// is actually running.
     var debugName: String {
-        isEstimated ? "估算深度(人体分割)" : "LiDAR"
+        isEstimated ? "Estimated (person segmentation)" : "LiDAR"
     }
 }
