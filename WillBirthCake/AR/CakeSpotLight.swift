@@ -27,7 +27,7 @@ final class CakeSpotLight {
     enum Tuning {
         /// Starting intensity in lumens. Deliberately conservative — erring dim is
         /// recoverable by eye, overexposure is what this rig exists to avoid.
-        static let defaultIntensity: Float = 1_500
+        static let defaultIntensity: Float = 5_500
         static let maximumIntensity: Float = 10_000
 
         /// Position relative to the cake anchor, in metres. Above and off to one

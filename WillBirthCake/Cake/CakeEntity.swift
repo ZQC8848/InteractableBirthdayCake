@@ -9,8 +9,10 @@
 //
 //  * the **cake**, split into chunks so an explosion only rebuilds the few chunks
 //    it touched rather than all ~7000 voxels, and
-//  * the **text**, built once and never rebuilt. It is buried inside the cake at
-//    the start and simply becomes visible as the chunks around it are carved away.
+//  * the **text**, on its own finer grid, built once and never rebuilt. It is not
+//    part of the voxel grid at all, so the explosion has no way to reach it — it
+//    simply becomes visible as the cake around it is carved away. See
+//    VoxelTextLayout for why it cannot share the cake's grid.
 //
 
 import Foundation
@@ -47,17 +49,13 @@ final class CakeEntity: Entity {
         self.voxelSize = voxelSize
 
         // Flatten every visible layer into one voxel list, applying each layer's
-        // origin offset. Text layers are marked indestructible here — that flag is
-        // the only thing protecting the message from the explosion.
+        // origin offset.
         var allVoxels: [Voxel] = []
         for model in data.models where model.visible {
             let offset = model.originOffset
-            let destructible = !model.isProtectedText
             for record in model.voxels {
                 let coord = VoxelCoord(record.x, record.y, record.z) + offset
-                allVoxels.append(
-                    Voxel(coord: coord, materialID: record.materialId, isDestructible: destructible)
-                )
+                allVoxels.append(Voxel(coord: coord, materialID: record.materialId))
             }
         }
 
@@ -141,11 +139,8 @@ final class CakeEntity: Entity {
     }
 
     /// Rebuilds one chunk's cake geometry from the current grid state.
-    ///
-    /// A cake face is hidden when *any* voxel sits next to it, text included: the
-    /// text never disappears, so it is always a valid occluder.
     private func rebuildChunk(_ chunk: ChunkCoord) throws {
-        let voxels = grid.voxels(inChunk: chunk).filter(\.isDestructible)
+        let voxels = grid.voxels(inChunk: chunk)
 
         let mesh = try VoxelMeshBuilder.buildMesh(
             voxels: voxels,
@@ -170,24 +165,65 @@ final class CakeEntity: Entity {
         }
     }
 
-    /// The text is built once. Its faces are hidden only by *other text voxels*, so
-    /// it carries a complete outer surface from the start and is simply revealed as
-    /// the surrounding cake is destroyed.
+    /// Builds the hidden message, once.
+    ///
+    /// The text has its own grid, `VoxelTextLayout.scale` cake-voxels per cell, so it
+    /// is meshed in its own coordinate space and mapped into the cake's by the offset
+    /// computed below rather than by an entity transform — that keeps the geometry
+    /// itself correctly sized, with no scale factor for later code to trip over.
+    ///
+    /// Its faces are hidden only by *other text cells*, never by cake, so it carries
+    /// a complete outer surface from the start and is simply uncovered as the cake
+    /// around it is destroyed.
     private func buildText() throws {
-        let textVoxels = grid.voxels.values.filter { !$0.isDestructible }
-        guard !textVoxels.isEmpty else { return }
+        let cells = VoxelTextLayout.cells
+        guard !cells.isEmpty else { return }
 
-        let textCoords = Set(textVoxels.map(\.coord))
+        // Text-space voxels: u to the right, v downward, one cell thick in z.
+        let coords = cells.map { VoxelCoord($0.u, -$0.v, 0) }
+        let occupied = Set(coords)
+        let voxels = coords.map { Voxel(coord: $0, materialID: 0) }
+
+        let scale = VoxelTextLayout.scale
+        let textVoxelSize = scale * voxelSize
+
+        // Chosen so text-space maps onto the cake's grid: the block centres on x = 0,
+        // its top edge lands on `topY`, and the slab sits on `planeZ`.
+        let textOffset = SIMD3<Float>(
+            Float(VoxelTextLayout.blockWidth) / 2 + originOffset.x / scale,
+            1 - (VoxelTextLayout.topY - originOffset.y) / scale,
+            0.5 - (VoxelTextLayout.planeZ + 0.5 - originOffset.z) / scale
+        )
+
         let mesh = try VoxelMeshBuilder.buildMesh(
-            voxels: textVoxels,
-            voxelSize: voxelSize,
-            originOffset: originOffset,
-            occluder: { textCoords.contains($0) },
-            materialIndex: { [weak self] id, tier in self?.slot(for: id, tier: tier) ?? 0 }
+            voxels: voxels,
+            voxelSize: textVoxelSize,
+            originOffset: textOffset,
+            occluder: { occupied.contains($0) },
+            materialIndex: { _, tier in UInt32(tier.index) }
         )
         guard let mesh else { return }
-        textRoot.addChild(ModelEntity(mesh: mesh, materials: materials))
+        textRoot.addChild(ModelEntity(mesh: mesh, materials: Self.textMaterials))
     }
+
+    /// One variant per face tier, matching how the cake is shaded.
+    private static let textMaterials: [RealityKit.Material] = {
+        let colour = VoxelTextLayout.colour
+        return FaceShadingTier.allCases
+            .sorted { $0.index < $1.index }
+            .map { tier in
+                var material = PhysicallyBasedMaterial()
+                material.baseColor = .init(tint: UIColor(
+                    red: CGFloat(colour.r * tier.brightness),
+                    green: CGFloat(colour.g * tier.brightness),
+                    blue: CGFloat(colour.b * tier.brightness),
+                    alpha: 1
+                ))
+                material.roughness = 0.35
+                material.metallic = 0.7
+                return material
+            }
+    }()
 
     // MARK: - Interaction
 
@@ -238,7 +274,7 @@ final class CakeEntity: Entity {
         materials[Int(slot(for: materialID, tier: .sideX))]
     }
 
-    var destructibleVoxelCount: Int {
-        grid.voxels.values.count(where: \.isDestructible)
+    var remainingVoxelCount: Int {
+        grid.voxels.count
     }
 }

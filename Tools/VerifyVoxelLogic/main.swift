@@ -24,10 +24,10 @@ func check(_ label: String, _ condition: Bool, _ detail: String = "") {
 }
 
 print("== decoding ==")
-check("models", scene.models.count == 7, "got \(scene.models.count)")
-check("materials array has duplicates", scene.materials.count == 17, "got \(scene.materials.count)")
+check("models", scene.models.count == 6, "got \(scene.models.count)")
+check("materials array has duplicates", scene.materials.count == 16, "got \(scene.materials.count)")
 let byID = scene.materialsByID
-check("materialsByID collapses duplicates", byID.count == 14, "got \(byID.count)")
+check("materialsByID collapses duplicates", byID.count == 13, "got \(byID.count)")
 check("id 1 resolves to cake_pink (last wins)", byID[1]?.name == "cake_pink", "got \(byID[1]?.name ?? "nil")")
 check("id 2 resolves to frosting_white", byID[2]?.name == "frosting_white", "got \(byID[2]?.name ?? "nil")")
 check("id 3 resolves to frosting_pink", byID[3]?.name == "frosting_pink", "got \(byID[3]?.name ?? "nil")")
@@ -37,29 +37,19 @@ let voxelSize: Float = 0.0065
 var allVoxels: [Voxel] = []
 for model in scene.models where model.visible {
     let offset = model.originOffset
-    let destructible = !model.isProtectedText
     for record in model.voxels {
         allVoxels.append(Voxel(
             coord: VoxelCoord(record.x, record.y, record.z) + offset,
-            materialID: record.materialId,
-            isDestructible: destructible
+            materialID: record.materialId
         ))
     }
 }
 let grid = VoxelGrid(voxels: allVoxels, voxelSize: voxelSize)
 
 print("\n== grid ==")
-// 6965 records collapse to 6805 distinct coordinates: 118 text voxels sit inside
-// Bottom_Tier and 42 candle voxels sink into the tiers above.
+// 6847 records collapse to 6805 distinct coordinates: 42 candle voxels sink into
+// the tiers above them.
 check("total voxels", grid.voxels.count == 6805, "got \(grid.voxels.count)")
-let textCount = grid.voxels.values.filter { !$0.isDestructible }.count
-check("protected text voxels survive the overlap", textCount == 118, "got \(textCount)")
-
-// Order-independence: feeding the layers in reverse must not let cake voxels
-// overwrite the text.
-let reversedGrid = VoxelGrid(voxels: allVoxels.reversed(), voxelSize: voxelSize)
-let reversedTextCount = reversedGrid.voxels.values.filter { !$0.isDestructible }.count
-check("protection is independent of layer order", reversedTextCount == 118, "got \(reversedTextCount)")
 print("  info  bbox \(grid.minCoord) .. \(grid.maxCoord)")
 let extent = SIMD3<Float>(
     Float(grid.maxCoord.x - grid.minCoord.x + 1),
@@ -136,7 +126,6 @@ let before = grid.voxels.count
 let surfaceHit = grid.firstSolidVoxel(rayOrigin: cameraLocal, direction: centreLocal - cameraLocal)!
 let (removed, dirty) = grid.removeSphere(centre: surfaceHit, radius: blastRadius)
 check("removed something", !removed.isEmpty, "removed \(removed.count)")
-check("all removed were destructible", removed.allSatisfy(\.isDestructible))
 check("grid shrank by exactly that many", grid.voxels.count == before - removed.count)
 check("removed voxels are gone", removed.allSatisfy { !grid.isOccupied($0.coord) })
 check("nothing outside the radius was touched", removed.allSatisfy { voxel in
@@ -149,24 +138,56 @@ print("  info  dirty chunks \(dirty.count)")
 check("dirty set covers every removed voxel's chunk",
       removed.allSatisfy { dirty.contains(VoxelGrid.chunk(containing: $0.coord)) })
 
-// Text must survive a blast aimed straight at it.
-print("\n== text protection ==")
-let textVoxel = grid.voxels.values.first { !$0.isDestructible }!
-let textBefore = grid.voxels.values.filter { !$0.isDestructible }.count
-let (removedNearText, _) = grid.removeSphere(centre: textVoxel.coord, radius: 4)
-let textAfter = grid.voxels.values.filter { !$0.isDestructible }.count
-check("blast centred on text destroys no text", textAfter == textBefore, "\(textBefore) -> \(textAfter)")
-check("but it does clear the cake around it", !removedNearText.isEmpty, "removed \(removedNearText.count)")
-check("text voxel itself survives", grid.isOccupied(textVoxel.coord))
+// The hidden message. It is on its own finer grid, so the thing worth checking is
+// no longer "is it flagged indestructible" but "is every cell actually buried".
+// A cell that lands outside solid cake is visible from the outside before the cake
+// is ever hit — which is exactly the failure that ruled out the grid-aligned
+// layouts, and exactly what silently comes back if the wording changes.
+print("\n== hidden text containment ==")
 
-// Newly exposed faces: after carving, the text should have cake-free neighbours,
-// which is what makes it visible.
-let exposedTextFaces = grid.voxels.values
-    .filter { !$0.isDestructible }
-    .reduce(0) { total, voxel in
-        total + voxel.coord.neighbours.filter { !grid.isOccupied($0) }.count
-    }
-check("text now has exposed faces", exposedTextFaces > 0, "\(exposedTextFaces) faces")
+let freshGrid = VoxelGrid(voxels: allVoxels, voxelSize: voxelSize)
+func isInterior(_ c: VoxelCoord) -> Bool {
+    freshGrid.isOccupied(c) && c.neighbours.allSatisfy { freshGrid.isOccupied($0) }
+}
+
+let cells = VoxelTextLayout.cells
+print("  info  lines \(VoxelTextLayout.lines) at scale \(VoxelTextLayout.scale)")
+print("  info  block \(VoxelTextLayout.blockWidth) x \(VoxelTextLayout.blockHeight) cells, \(cells.count) lit")
+check("text has cells", !cells.isEmpty)
+
+var buried = 0
+var exposed: [VoxelCoord] = []
+for cell in cells {
+    let p = VoxelTextLayout.gridCentre(of: cell)
+    let coord = VoxelCoord(Int(floor(p.x)), Int(floor(p.y)), Int(floor(p.z)))
+    if isInterior(coord) { buried += 1 } else { exposed.append(coord) }
+}
+check("every text cell is buried inside solid cake", exposed.isEmpty,
+      "\(buried)/\(cells.count) buried" + (exposed.isEmpty ? "" : ", first exposed at \(exposed[0])"))
+
+// The measurement behind rejecting the grid-aligned layouts. If a future change
+// makes native scale viable, this is the check that would start failing.
+var nativeBuried = 0
+for cell in cells {
+    let coord = VoxelCoord(
+        cell.u - VoxelTextLayout.blockWidth / 2,
+        Int(VoxelTextLayout.topY) - cell.v,
+        Int(VoxelTextLayout.planeZ)
+    )
+    if isInterior(coord) { nativeBuried += 1 }
+}
+print("  info  same text at native 1:1 scale would bury only \(nativeBuried)/\(cells.count)")
+check("scaling is still necessary", nativeBuried < cells.count,
+      "native fits \(nativeBuried)/\(cells.count)")
+
+// The text is not in the voxel grid at all, so no blast can touch it.
+let anyCoord = grid.voxels.keys.first!
+let sweep = VoxelGrid(voxels: allVoxels, voxelSize: voxelSize)
+sweep.removeSphere(centre: anyCoord, radius: 100)
+check("a blast large enough to clear the whole cake leaves no voxels",
+      sweep.voxels.isEmpty, "\(sweep.voxels.count) left")
+check("...and the text is untouched because it was never in the grid",
+      VoxelTextLayout.cells.count == cells.count)
 
 print("\n\(failures == 0 ? "ALL CHECKS PASSED" : "\(failures) CHECK(S) FAILED")")
 exit(failures == 0 ? 0 : 1)

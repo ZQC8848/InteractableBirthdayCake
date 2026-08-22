@@ -25,12 +25,6 @@ struct VoxelModelRecord: Decodable {
     let origin: [Int]
     let voxels: [VoxelRecord]
 
-    /// Layers whose name marks them as the protected "HAPPY BIRTHDAY" text.
-    /// The text is what the explosion is meant to reveal, so it never takes damage.
-    var isProtectedText: Bool {
-        name.lowercased().contains("text")
-    }
-
     var originOffset: VoxelCoord {
         // Defensive: the schema always writes three components, but a short array
         // would otherwise crash on subscript.

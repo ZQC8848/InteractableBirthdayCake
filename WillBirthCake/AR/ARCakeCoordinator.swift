@@ -93,7 +93,7 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
             // the moment the palm is recognised.
             let cake = try CakeEntity(scene: data)
             self.cake = cake
-            self.remainingVoxels = cake.destructibleVoxelCount
+            self.remainingVoxels = cake.remainingVoxelCount
         } catch {
             phase = .loadFailed(error.localizedDescription)
             return
@@ -154,7 +154,19 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
 
         gestureArmed.withLock { $0 = false }
 
-        let anchor = AnchorEntity(world: position)
+        // Yaw the cake so its +Z — the plane the hidden message lies in — points at
+        // the viewer. Without this the anchor keeps world-axis orientation and the
+        // text can end up facing sideways or straight away, which is invisible until
+        // someone walks around the cake.
+        let camera = arView.cameraTransform.translation
+        let toCamera = SIMD3<Float>(camera.x - position.x, 0, camera.z - position.z)
+        let yaw = simd_length(toCamera) > 1e-4 ? atan2(toCamera.x, toCamera.z) : 0
+
+        let anchor = AnchorEntity(world: Transform(
+            scale: .one,
+            rotation: simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0)),
+            translation: position
+        ).matrix)
         anchor.addChild(cake)
         arView.scene.addAnchor(anchor)
         cakeAnchor = anchor
@@ -180,7 +192,7 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
 
         let destroyed = explosions.fireRay(origin: ray.origin, direction: ray.direction)
         if destroyed > 0 {
-            remainingVoxels = cake?.destructibleVoxelCount ?? 0
+            remainingVoxels = cake?.remainingVoxelCount ?? 0
         }
     }
 
@@ -198,7 +210,7 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
         // old entity cannot be reused.
         guard let fresh = try? CakeEntity(scene: data) else { return }
         cake = fresh
-        remainingVoxels = fresh.destructibleVoxelCount
+        remainingVoxels = fresh.remainingVoxelCount
 
         detector.reset()
         gestureArmed.withLock { $0 = true }

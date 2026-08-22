@@ -18,6 +18,7 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 swiftc -O \
     "$SRC/VoxelSceneData.swift" \
     "$SRC/VoxelGrid.swift" \
+    "$REPO_ROOT/WillBirthCake/Cake/VoxelTextLayout.swift" \
     "$REPO_ROOT/Tools/VerifyVoxelLogic/main.swift" \
     -o "$BUILD_DIR/verify"
 

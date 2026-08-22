@@ -52,8 +52,6 @@ struct ChunkCoord: Hashable {
 struct Voxel {
     let coord: VoxelCoord
     let materialID: Int
-    /// Text voxels are inert: the explosion skips them so they survive to be revealed.
-    let isDestructible: Bool
 }
 
 // MARK: - Grid
@@ -70,20 +68,12 @@ final class VoxelGrid {
     let voxelSize: Float
 
     init(voxels: [Voxel], voxelSize: Float) {
-        // Layers overlap: all 118 text voxels sit inside the solid bottom tier, and
-        // the candle bases sink into the tiers above. Something has to win each
-        // shared coordinate.
-        //
-        // Protected voxels always win. Resolving this by layer order instead would
-        // work only as long as the text happens to be the last layer in the file —
-        // reorder the layers and the whole message silently turns into destructible
-        // cake and never appears, with nothing to point at the cause.
+        // Layers overlap — the candle bases sink into the tiers above — so something
+        // has to win each shared coordinate. Later layers do; the choice is purely
+        // which material shows, since every voxel here is destructible.
         var table: [VoxelCoord: Voxel] = [:]
         table.reserveCapacity(voxels.count)
         for voxel in voxels {
-            if let existing = table[voxel.coord], !existing.isDestructible, voxel.isDestructible {
-                continue
-            }
             table[voxel.coord] = voxel
         }
         self.voxels = table
@@ -141,8 +131,11 @@ final class VoxelGrid {
 
     // MARK: Mutation
 
-    /// Removes every destructible voxel whose centre lies within `radius` voxels of
-    /// `centre`, and reports which chunks now need their mesh rebuilt.
+    /// Removes every voxel whose centre lies within `radius` voxels of `centre`, and
+    /// reports which chunks now need their mesh rebuilt.
+    ///
+    /// The hidden message is not reachable from here: it is a separate mesh on its
+    /// own finer grid, not voxels in this table. See VoxelTextLayout.
     ///
     /// The dirty set includes the chunks of the *neighbours* of every removed voxel,
     /// not just the chunks the voxels lived in: carving a hole at a chunk boundary
@@ -169,7 +162,7 @@ final class VoxelGrid {
                 for dz in -r...r {
                     guard Float(dx * dx + dy * dy + dz * dz) <= radiusSquared else { continue }
                     let coord = VoxelCoord(centre.x + dx, centre.y + dy, centre.z + dz)
-                    guard let voxel = voxels[coord], voxel.isDestructible else { continue }
+                    guard let voxel = voxels[coord] else { continue }
                     removed.append(voxel)
                 }
             }
