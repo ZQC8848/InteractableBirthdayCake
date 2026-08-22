@@ -41,6 +41,11 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
     /// differ enough in accuracy that "which one am I testing?" is the first
     /// question when the markers look off.
     @Published private(set) var depthSourceName: String = "—"
+    /// DEBUG: spot intensity, exposed so it can be dialled in on a device. The right
+    /// value is not derivable — see CakeSpotLight.
+    @Published var spotIntensity: Float = CakeSpotLight.Tuning.defaultIntensity {
+        didSet { spotLight?.intensity = spotIntensity }
+    }
 
     private weak var arView: ARView?
     private var cake: CakeEntity?
@@ -49,6 +54,8 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
 
     /// DEBUG SCAFFOLDING — see Debug/HandJointDebugOverlay.swift.
     private let debugOverlay = HandJointDebugOverlay()
+
+    private var spotLight: CakeSpotLight?
 
     /// Serial queue for ARKit delegate callbacks. Vision runs here so a ~30 ms
     /// inference never stalls rendering.
@@ -121,10 +128,8 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
 
         updateCaptureOrientation()
 
-        // No explicit lights. Face separation is baked into the voxel materials by
-        // `FaceShadingTier`, so the scene needs only the environment lighting ARKit
-        // derives from the camera — which keeps the cake matched to the real room and
-        // cannot overexpose it. ARView's grounding shadow is left on for contact.
+        // The spot light is created with the cake, not here — it is parented to the
+        // cake's anchor so it frames the cake wherever the palm turned out to be.
         debugOverlay.attach(to: arView.scene) // DEBUG:
         gestureArmed.withLock { $0 = true }
         phase = .searchingForPalm
@@ -154,6 +159,12 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
         arView.scene.addAnchor(anchor)
         cakeAnchor = anchor
 
+        // Parented to the anchor so it frames the cake wherever the palm was.
+        let light = CakeSpotLight()
+        light.intensity = spotIntensity
+        light.attach(to: anchor)
+        spotLight = light
+
         // Animates the cake, not the anchor: debris is parented to the anchor, and
         // scaling that would drag any fragments along with it.
         CakeSpawnAnimation.play(on: cake, in: arView.scene)
@@ -180,6 +191,8 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
         cakeAnchor.map { arView.scene.removeAnchor($0) }
         cakeAnchor = nil
         explosions = nil
+        // Went away with the anchor it was parented to.
+        spotLight = nil
 
         // Rebuilt from scratch: the grid is mutated in place by explosions, so the
         // old entity cannot be reused.

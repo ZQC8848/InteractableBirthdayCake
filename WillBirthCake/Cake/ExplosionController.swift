@@ -7,8 +7,8 @@
 //
 //  Real physics (rather than scripted arcs) is a deliberate choice — see
 //  .ai/decisions/explosion-physics-real.md. The cost is that the number of
-//  simultaneous bodies has to be bounded, which is what `Tuning.maxVoxelsPerBlast`
-//  and the debris lifetime are for.
+//  simultaneous bodies has to be bounded, which is what `Tuning.maxDebrisPerBlast`
+//  and the debris lifetime are for. That bound caps the *debris*, never the hole.
 //
 
 import Foundation
@@ -29,7 +29,7 @@ final class ExplosionController {
         /// Sampled at random rather than nearest-first: taking the closest N would
         /// leave the whole outer shell of the blast disappearing with no debris at
         /// all, which reads as a rendering glitch rather than an explosion.
-        static let maxDebrisPerBlast = 200
+        static let maxDebrisPerBlast = 160
         /// Outward speed at the blast centre, m/s.
         static let baseSpeed: Float = 2.4
         /// Fraction of `baseSpeed` still applied at the very edge of the blast.

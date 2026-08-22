@@ -41,8 +41,8 @@
 ## 进行中 / 待定
 
 - 手势阈值目前**刻意放得很宽**（倾角容差 80°、伸展比 1.05、置信度 0.3、保持 0.3s），目的是先确认它能触发。80° 意味着接近竖直的手掌也算「朝上」，确认识别正常之后应该先收紧这一条。
-- 爆炸半径 6.4，实测一次清掉 727 个体素（占可破坏体素的 10% 以上），从中随机抛出最多 200 个碎片。**200 个刚体同时模拟是目前最大的性能风险**，掉帧就先调小 `ExplosionController.Tuning.maxDebrisPerBlast`——它不影响洞的大小。
-- 光照改成了**面向明暗烘焙 + 纯环境光**（无显式光源），四档系数 1.0 / 0.80 / 0.66 / 0.50 是初值。整体太暗就调 `arView.environment.lighting.intensityExponent`，**不要加回定向光**——过曝和硬阴影就是那么来的，理由见 [architecture.md](architecture.md)。
+- 爆炸半径 6.4，实测一次清掉 727 个体素（占可破坏体素的 10% 以上），从中随机抛出碎片。**真机实测 200 个刚体会掉帧，已降到 160。** 还掉就继续调小 `ExplosionController.Tuning.maxDebrisPerBlast`——它不影响洞的大小。
+- 光照 = **面向明暗烘焙（底子）+ 一盏聚光灯（高光）**，聚光灯不投影。**强度必须在真机上用调试面板的滑杆调**——RealityKit 的流明标度和物理估算差两个数量级，推算不出来，上一版过曝就是推算的结果。调定后把值写回 `CakeSpotLight.Tuning.defaultIntensity`。
 - 人体遮挡已用 `renderOptions.disablePersonOcclusion` 关掉：`personSegmentationWithDepth` 这个 frame semantic 是手部深度的唯一来源，但 ARView 会顺带把人合成到虚拟内容之前，手会挡住蛋糕。深度要留，遮挡不要。
 - 界面文案已全部改为英文。
 - 碎片会穿过剩余的蛋糕本体（蛋糕没有碰撞体，这是 [射线步进命中检测](decisions/hit-testing-by-ray-marching.md) 明确接受的代价）。碎片之间会互相碰撞。
