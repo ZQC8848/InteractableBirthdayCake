@@ -9,7 +9,7 @@
 1. **AR 会话启动** — `ARCakeCoordinator.attach(to:)` 配置 `ARWorldTrackingConfiguration`，深度来源按 `.smoothedSceneDepth` → `.sceneDepth` → `.personSegmentationWithDepth` 降级，全都不支持才进入 `.unsupportedDevice`。同时**提前**把整个蛋糕 mesh 建好（约 7000 体素，等手势识别到再建会有可见卡顿）。场景里**没有任何显式光源**，见下节。
 2. **逐帧手势识别** — ARKit 在后台串行队列 `visionQueue` 上回调 `session(_:didUpdate:)`，`HandGestureDetector` 每 3 帧跑一次 `VNDetectHumanHandPoseRequest`（60fps 下约 20Hz），判定五指伸展 + 掌心朝上。
 3. **3D 定位** — 把 Vision 的 2D 关键点（手腕、食指根、小指根）通过深度图 + 相机内参反投影成世界坐标。深度取窗口中位数（LiDAR 3×3，估算深度 5×5）——手在 256×192 的深度图里是个又小又噪的目标，单点采样一旦落在轮廓外就会把蛋糕放到几米之外；估算深度还要用人体分割蒙版过滤，蒙版外的值没有意义。掌心法线由两个跨掌向量叉乘得到，符号按 `chirality` 翻转。姿势要连续保持 0.3 秒才触发。
-4. **生成蛋糕** — `AnchorEntity(world:)` 锚在掌心位置，蛋糕挂上去，然后**关闭手势检测**。锚点和手部数据自此完全解耦，手移开蛋糕不动。
+4. **生成蛋糕** — `AnchorEntity(world:)` 锚在掌心位置，蛋糕挂上去并播放出场动画（缩放 0 → 1.1 → 1，0.55s），然后**关闭手势检测**。锚点和手部数据自此完全解耦，手移开蛋糕不动。
 5. **点击交互** — 点击 → `ARView.ray(through:)` → 变换到蛋糕本地空间 → `VoxelGrid.firstSolidVoxel` 做 DDA 射线步进找到第一个实心体素。不走 RealityKit 碰撞体，原因见 [decisions/hit-testing-by-ray-marching.md](decisions/hit-testing-by-ray-marching.md)。
 6. **爆炸** — 以命中体素为球心，半径 6.4 体素范围内的**可破坏**体素全部被移除（实测 727 个，挖洞不设上限），只重建被弄脏的 chunk（实测 12 个）→ 从中**随机抽最多 200 个**生成独立 `ModelEntity`，挂 `PhysicsBodyComponent`，获得径向冲量 + 随机扰动 + 向上偏置，交给 RealityKit 物理引擎，4 秒后回收；其余体素跟着几何直接消失。
 
@@ -21,6 +21,7 @@
 | `Voxel/VoxelGrid.swift` | 运行时体素状态 | chunk 分组、球形挖除、DDA 射线步进；**受保护体素赢得坐标冲突** |
 | `Voxel/VoxelMeshBuilder.swift` | 网格生成 | 隐面剔除；按材质拆分 mesh part |
 | `Cake/CakeEntity.swift` | 实体组装 | 蛋糕分 chunk 可重建；文字只建一次 |
+| `Cake/CakeSpawnAnimation.swift` | 出场动画 | `easeOutBack`，单条曲线完成过冲回弹 |
 | `Cake/ExplosionController.swift` | 碎片物理 | 冲量、**碎片**数量上限（与洞的大小解耦）、生命周期 |
 | `Hand/HandDepthSource.swift` | 深度来源抽象 | LiDAR 优先，退回人体分割估算深度 |
 | `Hand/HandGestureDetector.swift` | 手势 + 3D 定位 | `nonisolated`，跑在后台队列 |

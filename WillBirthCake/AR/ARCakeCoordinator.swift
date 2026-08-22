@@ -154,6 +154,10 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
         arView.scene.addAnchor(anchor)
         cakeAnchor = anchor
 
+        // Animates the cake, not the anchor: debris is parented to the anchor, and
+        // scaling that would drag any fragments along with it.
+        CakeSpawnAnimation.play(on: cake, in: arView.scene)
+
         explosions = ExplosionController(cake: cake, debrisRoot: anchor)
         phase = .cakePlaced
     }
