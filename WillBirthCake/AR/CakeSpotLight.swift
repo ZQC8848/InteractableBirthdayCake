@@ -12,9 +12,8 @@
 //  not something to derive on paper. Apple's own guidance is 10,000 lumens at an
 //  attenuation radius of 6 for a room-scale scene, while a photometric estimate for
 //  a light 45 cm from a 16 cm cake lands near 120 — two orders of magnitude apart.
-//  The previous lighting attempt overexposed precisely because a value was reasoned
-//  out rather than looked at, so the intensity here is a starting point with a live
-//  debug slider attached (see ContentView), not a considered constant.
+//  So `intensity` below is not a derived number, it is the value that looked right
+//  on an iPhone 16 Plus. Change it by looking, not by arithmetic.
 //
 
 import RealityKit
@@ -25,10 +24,8 @@ import simd
 final class CakeSpotLight {
 
     enum Tuning {
-        /// Starting intensity in lumens. Deliberately conservative — erring dim is
-        /// recoverable by eye, overexposure is what this rig exists to avoid.
-        static let defaultIntensity: Float = 5_500
-        static let maximumIntensity: Float = 10_000
+        /// Lumens. Dialled in on device — see the note at the top of this file.
+        static let intensity: Float = 5_500
 
         /// Position relative to the cake anchor, in metres. Above and off to one
         /// side: a light straight overhead leaves all four vertical faces equally
@@ -49,7 +46,7 @@ final class CakeSpotLight {
 
     init() {
         light.light.color = .white
-        light.light.intensity = Tuning.defaultIntensity
+        light.light.intensity = Tuning.intensity
         light.light.innerAngleInDegrees = Tuning.innerAngleDegrees
         light.light.outerAngleInDegrees = Tuning.outerAngleDegrees
         light.light.attenuationRadius = Tuning.attenuationRadius
@@ -70,10 +67,5 @@ final class CakeSpotLight {
             upVector: SIMD3<Float>(0, 1, 0),
             relativeTo: anchor
         )
-    }
-
-    var intensity: Float {
-        get { light.light.intensity }
-        set { light.light.intensity = newValue }
     }
 }

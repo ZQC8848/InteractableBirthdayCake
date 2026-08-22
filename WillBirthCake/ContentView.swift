@@ -54,22 +54,6 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            Divider().overlay(.white.opacity(0.3))
-
-            // The correct spot intensity is not something that can be worked out
-            // away from a device: RealityKit's lumens do not map onto the scene the
-            // way a photometric estimate suggests. Rather than shipping another
-            // guessed constant, this hands the dial to whoever can see the result.
-            VStack(spacing: 2) {
-                Text(String(format: "Spot intensity  %.0f lm", coordinator.spotIntensity))
-                    .font(.caption.monospaced())
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Slider(
-                    value: $coordinator.spotIntensity,
-                    in: 0...CakeSpotLight.Tuning.maximumIntensity
-                )
-                .tint(.white)
-            }
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 14)

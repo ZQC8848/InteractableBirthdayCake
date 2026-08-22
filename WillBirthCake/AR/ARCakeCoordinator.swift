@@ -41,11 +41,6 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
     /// differ enough in accuracy that "which one am I testing?" is the first
     /// question when the markers look off.
     @Published private(set) var depthSourceName: String = "—"
-    /// DEBUG: spot intensity, exposed so it can be dialled in on a device. The right
-    /// value is not derivable — see CakeSpotLight.
-    @Published var spotIntensity: Float = CakeSpotLight.Tuning.defaultIntensity {
-        didSet { spotLight?.intensity = spotIntensity }
-    }
 
     private weak var arView: ARView?
     private var cake: CakeEntity?
@@ -173,7 +168,6 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
 
         // Parented to the anchor so it frames the cake wherever the palm was.
         let light = CakeSpotLight()
-        light.intensity = spotIntensity
         light.attach(to: anchor)
         spotLight = light
 
