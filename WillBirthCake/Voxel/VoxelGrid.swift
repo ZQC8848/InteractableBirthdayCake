@@ -148,33 +148,32 @@ final class VoxelGrid {
     /// not just the chunks the voxels lived in: carving a hole at a chunk boundary
     /// exposes faces belonging to the adjacent chunk, and those would otherwise stay
     /// invisible, leaving a see-through gap in the cake.
+    ///
+    /// Deliberately uncapped. An earlier version limited the count here to bound how
+    /// many rigid bodies a blast could spawn, which quietly coupled the *size of the
+    /// hole* to a physics budget: raising the radius then changed nothing visible,
+    /// because keeping the nearest N voxels of a bigger sphere carves exactly the
+    /// same smaller sphere. The debris budget belongs in ExplosionController, where
+    /// it can be spent without shrinking the hole.
     @discardableResult
     func removeSphere(
         centre: VoxelCoord,
-        radius: Float,
-        limit: Int
+        radius: Float
     ) -> (removed: [Voxel], dirtyChunks: Set<ChunkCoord>) {
         let r = Int(ceil(radius))
         let radiusSquared = radius * radius
 
-        var candidates: [(distanceSquared: Float, voxel: Voxel)] = []
+        var removed: [Voxel] = []
         for dx in -r...r {
             for dy in -r...r {
                 for dz in -r...r {
-                    let distanceSquared = Float(dx * dx + dy * dy + dz * dz)
-                    guard distanceSquared <= radiusSquared else { continue }
+                    guard Float(dx * dx + dy * dy + dz * dz) <= radiusSquared else { continue }
                     let coord = VoxelCoord(centre.x + dx, centre.y + dy, centre.z + dz)
                     guard let voxel = voxels[coord], voxel.isDestructible else { continue }
-                    candidates.append((distanceSquared, voxel))
+                    removed.append(voxel)
                 }
             }
         }
-
-        // Cap the blast so a single tap cannot spawn an unbounded number of rigid
-        // bodies. Keeping the closest voxels means the hole stays centred on the
-        // impact instead of losing a random subset.
-        candidates.sort { $0.distanceSquared < $1.distanceSquared }
-        let removed = candidates.prefix(limit).map(\.voxel)
 
         var dirtyChunks: Set<ChunkCoord> = []
         for voxel in removed {

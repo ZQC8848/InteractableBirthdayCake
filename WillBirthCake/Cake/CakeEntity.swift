@@ -179,21 +179,18 @@ final class CakeEntity: Entity {
     /// - Parameters:
     ///   - rayOrigin, rayDirection: in **this entity's local space**.
     ///   - radius: blast radius, in voxels.
-    ///   - limit: hard cap on voxels destroyed per tap, bounding how many rigid
-    ///     bodies a single tap can spawn.
     /// - Returns: `nil` when the ray misses the cake, or hits protected text with
     ///   no destructible voxels nearby.
     func blast(
         rayOrigin: SIMD3<Float>,
         rayDirection: SIMD3<Float>,
-        radius: Float,
-        limit: Int
+        radius: Float
     ) -> BlastResult? {
         guard let hit = grid.firstSolidVoxel(rayOrigin: rayOrigin, direction: rayDirection) else {
             return nil
         }
 
-        let (removed, dirtyChunks) = grid.removeSphere(centre: hit, radius: radius, limit: limit)
+        let (removed, dirtyChunks) = grid.removeSphere(centre: hit, radius: radius)
         guard !removed.isEmpty else { return nil }
 
         for chunk in dirtyChunks {

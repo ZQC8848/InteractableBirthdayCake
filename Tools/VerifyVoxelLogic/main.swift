@@ -116,16 +116,35 @@ let besideOrigin = centreLocal + SIMD3<Float>(0.5, 0, 0.5)
 let besideHit = grid.firstSolidVoxel(rayOrigin: besideOrigin, direction: SIMD3<Float>(0, 0, -1))
 check("ray beside the cake misses", besideHit == nil, "got \(String(describing: besideHit))")
 
-// Sphere removal.
+// Sphere removal. The blast radius is the size of the *hole*; the debris budget is
+// a separate concern that lives in ExplosionController and must not shrink it.
 print("\n== blast ==")
+let blastRadius: Float = 6.4
+
+// Guard the trap that motivated decoupling the two: with a nearest-N cap on removal,
+// doubling the radius would carve an identical hole and look like nothing happened.
+let probe = VoxelGrid(voxels: allVoxels, voxelSize: voxelSize)
+let probeHit = probe.firstSolidVoxel(rayOrigin: cameraLocal, direction: centreLocal - cameraLocal)!
+let smallBlast = probe.removeSphere(centre: probeHit, radius: 3.2).removed.count
+let bigProbe = VoxelGrid(voxels: allVoxels, voxelSize: voxelSize)
+let bigBlast = bigProbe.removeSphere(centre: probeHit, radius: blastRadius).removed.count
+print("  info  radius 3.2 clears \(smallBlast) voxels, radius \(blastRadius) clears \(bigBlast)")
+check("doubling the radius actually enlarges the hole", bigBlast > smallBlast * 3,
+      "\(smallBlast) -> \(bigBlast)")
+
 let before = grid.voxels.count
 let surfaceHit = grid.firstSolidVoxel(rayOrigin: cameraLocal, direction: centreLocal - cameraLocal)!
-let (removed, dirty) = grid.removeSphere(centre: surfaceHit, radius: 3.2, limit: 160)
+let (removed, dirty) = grid.removeSphere(centre: surfaceHit, radius: blastRadius)
 check("removed something", !removed.isEmpty, "removed \(removed.count)")
 check("all removed were destructible", removed.allSatisfy(\.isDestructible))
-check("respects the cap", removed.count <= 160, "got \(removed.count)")
 check("grid shrank by exactly that many", grid.voxels.count == before - removed.count)
 check("removed voxels are gone", removed.allSatisfy { !grid.isOccupied($0.coord) })
+check("nothing outside the radius was touched", removed.allSatisfy { voxel in
+    let d = SIMD3<Float>(Float(voxel.coord.x - surfaceHit.x),
+                         Float(voxel.coord.y - surfaceHit.y),
+                         Float(voxel.coord.z - surfaceHit.z))
+    return simd_length(d) <= blastRadius + 0.001
+})
 print("  info  dirty chunks \(dirty.count)")
 check("dirty set covers every removed voxel's chunk",
       removed.allSatisfy { dirty.contains(VoxelGrid.chunk(containing: $0.coord)) })
@@ -134,7 +153,7 @@ check("dirty set covers every removed voxel's chunk",
 print("\n== text protection ==")
 let textVoxel = grid.voxels.values.first { !$0.isDestructible }!
 let textBefore = grid.voxels.values.filter { !$0.isDestructible }.count
-let (removedNearText, _) = grid.removeSphere(centre: textVoxel.coord, radius: 4, limit: 500)
+let (removedNearText, _) = grid.removeSphere(centre: textVoxel.coord, radius: 4)
 let textAfter = grid.voxels.values.filter { !$0.isDestructible }.count
 check("blast centred on text destroys no text", textAfter == textBefore, "\(textBefore) -> \(textAfter)")
 check("but it does clear the cake around it", !removedNearText.isEmpty, "removed \(removedNearText.count)")

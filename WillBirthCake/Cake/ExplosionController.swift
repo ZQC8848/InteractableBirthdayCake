@@ -19,11 +19,17 @@ import simd
 final class ExplosionController {
 
     enum Tuning {
-        /// Blast radius, in voxels.
-        static let blastRadius: Float = 3.2
-        /// Hard cap on debris per tap. A radius of 3.2 inside solid cake yields
-        /// ~140 voxels, so this mostly bites when several taps overlap.
-        static let maxVoxelsPerBlast = 160
+        /// Blast radius, in voxels. The hole is always carved at this full size.
+        static let blastRadius: Float = 6.4
+        /// Cap on *debris*, not on the hole. A radius of 6.4 inside solid cake
+        /// clears on the order of 800 voxels; turning every one into a rigid body
+        /// would swamp the physics solver, so a random sample of them is thrown and
+        /// the rest simply vanish with the geometry.
+        ///
+        /// Sampled at random rather than nearest-first: taking the closest N would
+        /// leave the whole outer shell of the blast disappearing with no debris at
+        /// all, which reads as a rendering glitch rather than an explosion.
+        static let maxDebrisPerBlast = 200
         /// Outward speed at the blast centre, m/s.
         static let baseSpeed: Float = 2.4
         /// Fraction of `baseSpeed` still applied at the very edge of the blast.
@@ -60,8 +66,7 @@ final class ExplosionController {
         guard let result = cake.blast(
             rayOrigin: localOrigin,
             rayDirection: localDirection,
-            radius: Tuning.blastRadius,
-            limit: Tuning.maxVoxelsPerBlast
+            radius: Tuning.blastRadius
         ) else { return 0 }
 
         spawnDebris(for: result)
@@ -69,6 +74,11 @@ final class ExplosionController {
     }
 
     private func spawnDebris(for result: CakeEntity.BlastResult) {
+        // The hole is already fully carved; this only decides what gets thrown.
+        let thrown = result.removed.count <= Tuning.maxDebrisPerBlast
+            ? result.removed
+            : Array(result.removed.shuffled().prefix(Tuning.maxDebrisPerBlast))
+
         let fragmentMesh = MeshResource.generateBox(size: voxelSize)
         let shape = ShapeResource.generateBox(size: SIMD3<Float>(repeating: voxelSize))
 
@@ -85,9 +95,9 @@ final class ExplosionController {
         let cakeRotation = cake.convert(transform: .identity, to: debrisRoot).rotation
 
         var spawned: [ModelEntity] = []
-        spawned.reserveCapacity(result.removed.count)
+        spawned.reserveCapacity(thrown.count)
 
-        for voxel in result.removed {
+        for voxel in thrown {
             let localPosition = cake.localCentre(of: voxel.coord)
 
             let fragment = ModelEntity(

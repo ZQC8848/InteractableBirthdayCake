@@ -119,6 +119,13 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
         arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
 
         updateCaptureOrientation()
+
+        // Anchored at the world origin rather than to the cake: directional lights
+        // only care about their orientation, and this way the rig survives a reset.
+        let lightAnchor = AnchorEntity(world: SIMD3<Float>.zero)
+        lightAnchor.addChild(SceneLighting.makeRig())
+        arView.scene.addAnchor(lightAnchor)
+
         debugOverlay.attach(to: arView.scene) // DEBUG:
         gestureArmed.withLock { $0 = true }
         phase = .searchingForPalm

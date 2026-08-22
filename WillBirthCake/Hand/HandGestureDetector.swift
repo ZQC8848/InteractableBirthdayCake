@@ -67,20 +67,29 @@ struct HandFrameResult {
 /// ARKit serialises those callbacks, so the mutable state below has a single writer.
 nonisolated final class HandGestureDetector {
 
+    /// Loosened across the board so the pose fires readily.
+    ///
+    /// Note that only the tilt tolerance gets *larger* to become more permissive —
+    /// the other three all have to move the other way. Doubling the hold duration,
+    /// the extension ratio or the confidence floor would each make the gesture
+    /// strictly harder to trigger, not easier.
     enum Tuning {
         /// How far from straight-up the palm may point and still count as "face up".
-        static let maxTiltFromUpDegrees: Float = 40
+        /// At 80° a nearly vertical palm still passes, which is very forgiving —
+        /// tighten this first once the gesture is confirmed working on a device.
+        static let maxTiltFromUpDegrees: Float = 80
         /// Vision confidence floor for an individual joint.
-        static let minJointConfidence: Float = 0.5
+        static let minJointConfidence: Float = 0.3
         /// How long the pose must hold before it fires, in seconds. Stops a hand
         /// passing through the pose from spawning a cake.
-        static let requiredHoldDuration: TimeInterval = 0.6
+        static let requiredHoldDuration: TimeInterval = 0.3
         /// Process every Nth frame. Vision at 60 fps is wasteful and starves the
-        /// render loop; ~10 Hz is plenty for a deliberate pose.
-        static let frameStride = 6
+        /// render loop; ~20 Hz keeps the debug markers readable while the pose is
+        /// being tuned.
+        static let frameStride = 3
         /// A finger counts as extended when the tip is at least this many times
         /// further from the wrist than its middle joint.
-        static let extensionRatio: Float = 1.15
+        static let extensionRatio: Float = 1.05
     }
 
     private let request = VNDetectHumanHandPoseRequest()

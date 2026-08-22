@@ -6,12 +6,12 @@
 
 ## 一个体素从生成到爆炸的完整流程
 
-1. **AR 会话启动** — `ARCakeCoordinator.attach(to:)` 配置 `ARWorldTrackingConfiguration`，优先 `.smoothedSceneDepth`，退回 `.sceneDepth`，两者都不支持就进入 `.unsupportedDevice` 停住。同时**提前**把整个蛋糕 mesh 建好（约 7000 体素，等手势识别到再建会有可见卡顿）。
-2. **逐帧手势识别** — ARKit 在后台串行队列 `visionQueue` 上回调 `session(_:didUpdate:)`，`HandGestureDetector` 每 6 帧跑一次 `VNDetectHumanHandPoseRequest`（60fps 下约 10Hz），判定五指伸展 + 掌心朝上。
-3. **3D 定位** — 把 Vision 的 2D 关键点（手腕、食指根、小指根）通过 LiDAR 深度图 + 相机内参反投影成世界坐标。深度取 3×3 窗口的中位数——手在 256×192 的深度图里是个又小又噪的目标，单点采样一旦落在轮廓外就会把蛋糕放到几米之外。掌心法线由两个跨掌向量叉乘得到，符号按 `chirality` 翻转。姿势要连续保持 0.6 秒才触发。
+1. **AR 会话启动** — `ARCakeCoordinator.attach(to:)` 配置 `ARWorldTrackingConfiguration`，深度来源按 `.smoothedSceneDepth` → `.sceneDepth` → `.personSegmentationWithDepth` 降级，全都不支持才进入 `.unsupportedDevice`。同时挂上 `SceneLighting` 的灯光，并**提前**把整个蛋糕 mesh 建好（约 7000 体素，等手势识别到再建会有可见卡顿）。
+2. **逐帧手势识别** — ARKit 在后台串行队列 `visionQueue` 上回调 `session(_:didUpdate:)`，`HandGestureDetector` 每 3 帧跑一次 `VNDetectHumanHandPoseRequest`（60fps 下约 20Hz），判定五指伸展 + 掌心朝上。
+3. **3D 定位** — 把 Vision 的 2D 关键点（手腕、食指根、小指根）通过深度图 + 相机内参反投影成世界坐标。深度取窗口中位数（LiDAR 3×3，估算深度 5×5）——手在 256×192 的深度图里是个又小又噪的目标，单点采样一旦落在轮廓外就会把蛋糕放到几米之外；估算深度还要用人体分割蒙版过滤，蒙版外的值没有意义。掌心法线由两个跨掌向量叉乘得到，符号按 `chirality` 翻转。姿势要连续保持 0.3 秒才触发。
 4. **生成蛋糕** — `AnchorEntity(world:)` 锚在掌心位置，蛋糕挂上去，然后**关闭手势检测**。锚点和手部数据自此完全解耦，手移开蛋糕不动。
 5. **点击交互** — 点击 → `ARView.ray(through:)` → 变换到蛋糕本地空间 → `VoxelGrid.firstSolidVoxel` 做 DDA 射线步进找到第一个实心体素。不走 RealityKit 碰撞体，原因见 [decisions/hit-testing-by-ray-marching.md](decisions/hit-testing-by-ray-marching.md)。
-6. **爆炸** — 以命中体素为球心，半径 3.2 体素范围内的**可破坏**体素被移除（上限 160 个），只重建被弄脏的 chunk → 每个被移除的体素生成一个独立 `ModelEntity`，挂 `PhysicsBodyComponent`，获得径向冲量 + 随机扰动 + 向上偏置，交给 RealityKit 物理引擎，4 秒后回收。
+6. **爆炸** — 以命中体素为球心，半径 6.4 体素范围内的**可破坏**体素全部被移除（实测 727 个，挖洞不设上限），只重建被弄脏的 chunk（实测 12 个）→ 从中**随机抽最多 200 个**生成独立 `ModelEntity`，挂 `PhysicsBodyComponent`，获得径向冲量 + 随机扰动 + 向上偏置，交给 RealityKit 物理引擎，4 秒后回收；其余体素跟着几何直接消失。
 
 ## 模块划分
 
@@ -21,8 +21,10 @@
 | `Voxel/VoxelGrid.swift` | 运行时体素状态 | chunk 分组、球形挖除、DDA 射线步进；**受保护体素赢得坐标冲突** |
 | `Voxel/VoxelMeshBuilder.swift` | 网格生成 | 隐面剔除；按材质拆分 mesh part |
 | `Cake/CakeEntity.swift` | 实体组装 | 蛋糕分 chunk 可重建；文字只建一次 |
-| `Cake/ExplosionController.swift` | 碎片物理 | 冲量、数量上限、生命周期 |
+| `Cake/ExplosionController.swift` | 碎片物理 | 冲量、**碎片**数量上限（与洞的大小解耦）、生命周期 |
+| `Hand/HandDepthSource.swift` | 深度来源抽象 | LiDAR 优先，退回人体分割估算深度 |
 | `Hand/HandGestureDetector.swift` | 手势 + 3D 定位 | `nonisolated`，跑在后台队列 |
+| `AR/SceneLighting.swift` | 主光 + 补光 | 只靠环境光会让所有体素面亮度一致，立方体退化成剪影 |
 | `AR/ARCakeCoordinator.swift` | 会话与状态编排 | 主线程隔离；跨线程状态用 `OSAllocatedUnfairLock` |
 | `AR/ARViewContainer.swift` | SwiftUI 桥接 | 用 `ARView` 而非 `RealityView`，因为需要自定义 session 配置、session delegate、`ray(through:)` |
 
@@ -42,10 +44,12 @@
 
 - **Vision 坐标 → 原生缓冲区的方向映射**（`HandGestureDetector.nativeNormalizedPoint(from:orientation:)`）。这段是按 `.right` 方向下"原生横向缓冲区顺时针转 90°"推导出来的，纸面上成立，但映射写错了照样会算出看起来合理的 3D 点，只是位置不对。**这是最可能出问题的一处。**
 - **掌心法线的符号**是否对左右手都指向掌心外侧（`chirality` 翻转那一行）。
-- **手势判定的阈值**：`maxTiltFromUpDegrees = 40`、`extensionRatio = 1.15`、`requiredHoldDuration = 0.6s`、`frameStride = 6` 全部是拍脑袋的初值，需要实测调。
-- **单次爆炸 160 个刚体**会不会掉帧。半径 3.2 实测挖出 103 个体素，上限 160 主要在多次点击重叠时才会触发。
+- **手势判定的阈值**：`maxTiltFromUpDegrees = 80`、`extensionRatio = 1.05`、`minJointConfidence = 0.3`、`requiredHoldDuration = 0.3s` 目前全部**刻意放宽**以便先看到它能触发。80° 意味着接近竖直的手掌也算「朝上」，确认识别正常之后应该先把这一条收紧。
+- **人体分割估算深度在只有一只手入镜时的质量**——分割网络主要是为整个人训练的。
+- **单次爆炸 200 个刚体**会不会掉帧。这是目前最大的性能风险，掉帧就先调小 `maxDebrisPerBlast`。
+- **光照**：`SceneLighting` 的主光/补光强度（12000 / 3000 lux）是拍脑袋的初值，AR 场景合成在明亮的相机画面之上，需要实机看曝光是否合适。
 - **蛋糕物理尺寸** 16.3 × 14.3 × 16.3 cm（`voxelSize = 0.0065`）在掌心里看着合不合适。
 
 ## 相关决策
 
-见 [decisions/](decisions/)：[仅 LiDAR 机型](decisions/device-scope-lidar-only.md)、[JSON 数据格式](decisions/voxel-data-format-json.md)、[真实物理爆炸](decisions/explosion-physics-real.md)、[RealityKit 渲染](decisions/render-engine-realitykit.md)、[射线步进命中检测](decisions/hit-testing-by-ray-marching.md)。
+见 [decisions/](decisions/)：[仅 LiDAR 机型](decisions/device-scope-lidar-only.md)、[JSON 数据格式](decisions/voxel-data-format-json.md)、[真实物理爆炸](decisions/explosion-physics-real.md)、[RealityKit 渲染](decisions/render-engine-realitykit.md)、[射线步进命中检测](decisions/hit-testing-by-ray-marching.md)。其中设备范围那条已经从「仅 LiDAR」改为降级链，原文档内标了 superseded。
