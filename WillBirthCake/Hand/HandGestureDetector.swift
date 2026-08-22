@@ -107,9 +107,9 @@ nonisolated final class HandGestureDetector {
         frameCounter += 1
         guard frameCounter % Tuning.frameStride == 0 else { return nil }
 
-        guard let depthMap = frame.sceneDepth?.depthMap else {
-            // No LiDAR depth: the project is scoped to depth-capable devices, so
-            // rather than guessing a distance we simply do not detect.
+        guard let depth = HandDepthSource(frame: frame) else {
+            // Neither LiDAR nor estimated depth this frame. Rather than guessing a
+            // distance, report nothing.
             return nil
         }
 
@@ -138,7 +138,7 @@ nonisolated final class HandGestureDetector {
         if includeAllJoints {
             for (name, point) in points where point.confidence >= Tuning.minJointConfidence {
                 if let world = unproject(
-                    point, frame: frame, depthMap: depthMap, orientation: orientation
+                    point, frame: frame, depth: depth, orientation: orientation
                 ) {
                     joints[name] = world
                 }
@@ -154,7 +154,7 @@ nonisolated final class HandGestureDetector {
             observation: observation,
             points: points,
             frame: frame,
-            depthMap: depthMap,
+            depth: depth,
             orientation: orientation
         )
 
@@ -213,7 +213,7 @@ nonisolated final class HandGestureDetector {
         observation: VNHumanHandPoseObservation,
         points: [VNHumanHandPoseObservation.JointName: VNRecognizedPoint],
         frame: ARFrame,
-        depthMap: CVPixelBuffer,
+        depth: HandDepthSource,
         orientation: CGImagePropertyOrientation
     ) -> PoseEvaluation {
 
@@ -235,9 +235,9 @@ nonisolated final class HandGestureDetector {
             return .rejected(.fingersNotExtended)
         }
 
-        guard let wrist3D = unproject(wrist, frame: frame, depthMap: depthMap, orientation: orientation),
-              let index3D = unproject(indexKnuckle, frame: frame, depthMap: depthMap, orientation: orientation),
-              let little3D = unproject(littleKnuckle, frame: frame, depthMap: depthMap, orientation: orientation)
+        guard let wrist3D = unproject(wrist, frame: frame, depth: depth, orientation: orientation),
+              let index3D = unproject(indexKnuckle, frame: frame, depth: depth, orientation: orientation),
+              let little3D = unproject(littleKnuckle, frame: frame, depth: depth, orientation: orientation)
         else {
             return .rejected(.noDepthAtLandmarks)
         }
@@ -311,7 +311,7 @@ nonisolated final class HandGestureDetector {
     private func unproject(
         _ point: VNRecognizedPoint,
         frame: ARFrame,
-        depthMap: CVPixelBuffer,
+        depth: HandDepthSource,
         orientation: CGImagePropertyOrientation
     ) -> SIMD3<Float>? {
 
@@ -320,7 +320,8 @@ nonisolated final class HandGestureDetector {
             return nil
         }
 
-        guard let depth = sampleDepth(depthMap, atNormalized: normalized), depth > 0.05, depth < 3
+        guard let distance = sampleDepth(depth, atNormalized: normalized),
+              distance > 0.05, distance < 3
         else { return nil }
 
         // Unproject with the camera intrinsics, which are expressed in the captured
@@ -330,12 +331,12 @@ nonisolated final class HandGestureDetector {
         let px = Float(normalized.x) * Float(resolution.width)
         let py = Float(normalized.y) * Float(resolution.height)
 
-        let x = (px - intrinsics[2][0]) * depth / intrinsics[0][0]
-        let y = (py - intrinsics[2][1]) * depth / intrinsics[1][1]
+        let x = (px - intrinsics[2][0]) * distance / intrinsics[0][0]
+        let y = (py - intrinsics[2][1]) * distance / intrinsics[1][1]
 
         // Image space is y-down and looks along +z; ARKit's camera is y-up looking
         // along -z, hence the two sign flips.
-        let inCamera = SIMD4<Float>(x, -y, -depth, 1)
+        let inCamera = SIMD4<Float>(x, -y, -distance, 1)
         let inWorld = frame.camera.transform * inCamera
         return SIMD3<Float>(inWorld.x, inWorld.y, inWorld.z)
     }
@@ -368,26 +369,63 @@ nonisolated final class HandGestureDetector {
         }
     }
 
-    private func sampleDepth(_ depthMap: CVPixelBuffer, atNormalized point: CGPoint) -> Float? {
-        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+    private func sampleDepth(_ source: HandDepthSource, atNormalized point: CGPoint) -> Float? {
+        let buffer = source.buffer
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
 
-        guard let base = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
-        let width = CVPixelBufferGetWidth(depthMap)
-        let height = CVPixelBufferGetHeight(depthMap)
-        let bytesPerRow = CVPixelBufferGetBytesPerRow(depthMap)
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
 
         let x = min(max(Int(point.x * CGFloat(width)), 0), width - 1)
         let y = min(max(Int(point.y * CGFloat(height)), 0), height - 1)
 
         // A hand is a small, noisy target in a 256×192 depth map, so take the median
-        // of a small window instead of a single reading. One stray sample off the
-        // silhouette would otherwise place the cake metres away.
+        // of a window instead of a single reading. One stray sample off the
+        // silhouette would otherwise place the cake metres away. Inferred depth is
+        // noticeably noisier than LiDAR's measurement, so it gets a wider window.
+        let reach = source.isEstimated ? 2 : 1
+
+        // Outside the person stencil the network's output is not meaningful, so those
+        // samples are dropped rather than averaged in. Without this a landmark near
+        // the silhouette edge would blend the hand with whatever is behind it.
+        let personMask = source.personStencil.map { stencil -> (UnsafeRawPointer, Int, Int, Int)? in
+            CVPixelBufferLockBaseAddress(stencil, .readOnly)
+            guard let stencilBase = CVPixelBufferGetBaseAddress(stencil) else { return nil }
+            return (
+                UnsafeRawPointer(stencilBase),
+                CVPixelBufferGetWidth(stencil),
+                CVPixelBufferGetHeight(stencil),
+                CVPixelBufferGetBytesPerRow(stencil)
+            )
+        } ?? nil
+        defer {
+            if personMask != nil, let stencil = source.personStencil {
+                CVPixelBufferUnlockBaseAddress(stencil, .readOnly)
+            }
+        }
+
+        func isPerson(normalizedX: Double, normalizedY: Double) -> Bool {
+            guard let (base, w, h, stride) = personMask else { return true }
+            let sx = min(max(Int(normalizedX * Double(w)), 0), w - 1)
+            let sy = min(max(Int(normalizedY * Double(h)), 0), h - 1)
+            return base.advanced(by: sy * stride + sx).load(as: UInt8.self) != 0
+        }
+
         var samples: [Float] = []
-        for dy in -1...1 {
-            for dx in -1...1 {
+        for dy in -reach...reach {
+            for dx in -reach...reach {
                 let sx = min(max(x + dx, 0), width - 1)
                 let sy = min(max(y + dy, 0), height - 1)
+                // Stencil and depth buffers need not share dimensions, so the lookup
+                // goes back through normalized coordinates.
+                guard isPerson(
+                    normalizedX: (Double(sx) + 0.5) / Double(width),
+                    normalizedY: (Double(sy) + 0.5) / Double(height)
+                ) else { continue }
+
                 let row = base.advanced(by: sy * bytesPerRow)
                 let value = row.assumingMemoryBound(to: Float32.self)[sx]
                 if value.isFinite, value > 0 { samples.append(value) }

@@ -37,6 +37,10 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
     @Published var showHandJoints: Bool = true
     @Published private(set) var handStatus: String = "—"
     @Published private(set) var handWristDepth: Float?
+    /// DEBUG: which depth path this device ended up on. Worth surfacing — the two
+    /// differ enough in accuracy that "which one am I testing?" is the first
+    /// question when the markers look off.
+    @Published private(set) var depthSourceName: String = "—"
 
     private weak var arView: ARView?
     private var cake: CakeEntity?
@@ -92,17 +96,23 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
         configuration.planeDetection = [.horizontal]
         configuration.environmentTexturing = .automatic
 
-        // Depth is what lifts Vision's 2D landmarks into world space. The project is
-        // scoped to LiDAR devices precisely so this is available — see
-        // .ai/decisions/device-scope-lidar-only.md.
+        // Depth is what lifts Vision's 2D landmarks into world space, and there are
+        // two ways to get it. LiDAR measures the whole scene and is preferred, but it
+        // only exists on Pro iPhones and iPad Pro. Everything from A12 up can instead
+        // infer depth for *people* — which includes a bare hand — via person
+        // segmentation. See .ai/decisions/device-scope-lidar-only.md.
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
             configuration.frameSemantics.insert(.smoothedSceneDepth)
         } else if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
             configuration.frameSemantics.insert(.sceneDepth)
+        } else if ARWorldTrackingConfiguration.supportsFrameSemantics(.personSegmentationWithDepth) {
+            configuration.frameSemantics.insert(.personSegmentationWithDepth)
         } else {
             phase = .unsupportedDevice
             return
         }
+        depthSourceName = configuration.frameSemantics
+            .contains(.personSegmentationWithDepth) ? "估算深度(人体分割)" : "LiDAR" // DEBUG:
 
         arView.session.delegateQueue = visionQueue
         arView.session.delegate = self

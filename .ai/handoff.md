@@ -52,4 +52,5 @@
 - **这个 target 开了 `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`**，不写标注的类型默认主线程隔离。`HandGestureDetector` 显式标了 `nonisolated` 才能在 ARKit 后台队列上跑。Swift 5 语言模式下违规只是警告，很容易一路编译通过然后在真机上出诡异问题。
 - **命中检测和渲染是两套独立的几何表示**（体素网格 vs 合并 mesh）。`VoxelGrid.localCentre(of:)` 和 `CakeEntity.originOffset` 必须用同一个偏移公式，改一个不改另一个，点击位置就会和看到的蛋糕错开——而且不会报错。
 - 改过 `WillBirthCake/Voxel/` 下的任何东西之后跑一下 `./Tools/VerifyVoxelLogic/run.sh`。
-- 真机需要 LiDAR。没有深度支持的设备会停在 `.unsupportedDevice` 提示页，不会崩，但也什么都不会发生——不要误以为是别的地方坏了。
+- **测试机 iPhone 16 Plus 没有 LiDAR**，走的是人体分割估算深度那条路（界面上"深度来源"那行会显示当前用的是哪个）。这条路噪声比 LiDAR 大，而且分割网络主要是为整个人训练的，**只有一只手入镜时质量如何还没验证过**——如果标记抖得厉害或者深度不稳，先怀疑这里，再怀疑方向映射。
+- 开了 `personSegmentationWithDepth` 之后 RealityKit 会同时启用人体遮挡，手指会挡住蛋糕。物理上是对的，但估算深度有噪声时可能闪烁，未验证。

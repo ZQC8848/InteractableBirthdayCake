@@ -48,6 +48,10 @@ struct ContentView: View {
                 } ?? "手腕距相机 —")
                     .font(.caption.monospaced())
                     .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text("深度来源：\(coordinator.depthSourceName)")
+                    .font(.caption.monospaced())
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .foregroundStyle(.white)
@@ -63,7 +67,7 @@ struct ContentView: View {
             hint("正在启动 AR…")
 
         case .unsupportedDevice:
-            hint("这台设备不支持所需的 AR 深度功能。\n本项目需要带 LiDAR 的机型。")
+            hint("这台设备不支持所需的 AR 深度功能。\n需要 A12 及以上芯片（iPhone XS 起）。")
 
         case .loadFailed(let message):
             hint("蛋糕数据加载失败：\n\(message)")
