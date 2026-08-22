@@ -7,8 +7,8 @@
 ## 一个体素从生成到爆炸的完整流程
 
 1. **AR 会话启动** — `ARCakeCoordinator.attach(to:)` 配置 `ARWorldTrackingConfiguration`，深度来源按 `.smoothedSceneDepth` → `.sceneDepth` → `.personSegmentationWithDepth` 降级，全都不支持才进入 `.unsupportedDevice`。同时**提前**把整个蛋糕 mesh 建好（约 7000 体素，等手势识别到再建会有可见卡顿）。场景里**没有任何显式光源**，见下节。
-2. **逐帧手势识别** — ARKit 在后台串行队列 `visionQueue` 上回调 `session(_:didUpdate:)`，`HandGestureDetector` 每 3 帧跑一次 `VNDetectHumanHandPoseRequest`（60fps 下约 20Hz），判定五指伸展 + 掌心朝上。
-3. **3D 定位** — 把 Vision 的 2D 关键点（手腕、食指根、小指根）通过深度图 + 相机内参反投影成世界坐标。深度取窗口中位数（LiDAR 3×3，估算深度 5×5）——手在 256×192 的深度图里是个又小又噪的目标，单点采样一旦落在轮廓外就会把蛋糕放到几米之外；估算深度还要用人体分割蒙版过滤，蒙版外的值没有意义。掌心法线由两个跨掌向量叉乘得到，符号按 `chirality` 翻转。姿势要连续保持 0.3 秒才触发。
+2. **逐帧手部识别** — ARKit 在后台串行队列 `visionQueue` 上回调 `session(_:didUpdate:)`，`HandGestureDetector` 每 3 帧跑一次 `VNDetectHumanHandPoseRequest`（60fps 下约 20Hz）。**没有姿势判定**：不看掌心朝向，也不看手指是否伸直，能定位到掌心就算数。
+3. **3D 定位** — 掌心取手腕 + 四个指根（`indexMCP`/`middleMCP`/`ringMCP`/`littleMCP`）中**凡是能反投影成功的那些**的平均值，至少两个才采信——不强求固定三个点，个别点被遮挡或深度有洞不该导致整次识别失败。反投影用深度图 + 相机内参；深度取窗口中位数（LiDAR 3×3，估算深度 5×5），因为手在 256×192 的深度图里是个又小又噪的目标，单点采样一旦落在轮廓外就会把蛋糕放到几米之外；估算深度还要用人体分割蒙版过滤，蒙版外的值没有意义。掌心要连续可见 0.3 秒才触发——**这一条不是姿势判定，是稳定性保险**：蛋糕是世界锚定的，一帧噪声就会把它永久钉在错误位置，只能按 Place Again 重来。
 4. **生成蛋糕** — `AnchorEntity(world:)` 锚在掌心位置，蛋糕挂上去并播放出场动画（缩放 0 → 1.1 → 1，0.55s），然后**关闭手势检测**。锚点和手部数据自此完全解耦，手移开蛋糕不动。
 5. **点击交互** — 点击 → `ARView.ray(through:)` → 变换到蛋糕本地空间 → `VoxelGrid.firstSolidVoxel` 做 DDA 射线步进找到第一个实心体素。不走 RealityKit 碰撞体，原因见 [decisions/hit-testing-by-ray-marching.md](decisions/hit-testing-by-ray-marching.md)。
 6. **爆炸** — 以命中体素为球心，半径 6.4 体素范围内的**可破坏**体素全部被移除（实测 727 个，挖洞不设上限），只重建被弄脏的 chunk（实测 12 个）→ 从中**随机抽最多 200 个**生成独立 `ModelEntity`，挂 `PhysicsBodyComponent`，获得径向冲量 + 随机扰动 + 向上偏置，交给 RealityKit 物理引擎，4 秒后回收；其余体素跟着几何直接消失。
@@ -77,7 +77,7 @@
 
 - **Vision 坐标 → 原生缓冲区的方向映射**（`HandGestureDetector.nativeNormalizedPoint(from:orientation:)`）。这段是按 `.right` 方向下"原生横向缓冲区顺时针转 90°"推导出来的，纸面上成立，但映射写错了照样会算出看起来合理的 3D 点，只是位置不对。**这是最可能出问题的一处。**
 - **掌心法线的符号**是否对左右手都指向掌心外侧（`chirality` 翻转那一行）。
-- **手势判定的阈值**：`maxTiltFromUpDegrees = 80`、`extensionRatio = 1.05`、`minJointConfidence = 0.3`、`requiredHoldDuration = 0.3s` 目前全部**刻意放宽**以便先看到它能触发。80° 意味着接近竖直的手掌也算「朝上」，确认识别正常之后应该先把这一条收紧。
+- 姿势判定已全部移除，只剩 `minJointConfidence = 0.3`、`minPalmLandmarks = 2`、`requiredHoldDuration = 0.3s`。代价是**只要有手入镜就会生成蛋糕**，没有任何姿势可以用来表达"我还不想放"——0.3 秒的保持是唯一的门槛。
 - **人体分割估算深度在只有一只手入镜时的质量**——分割网络主要是为整个人训练的。
 - 碎片上限从 200 降到 **160**（真机实测 200 会掉帧）。160 是否够稳还需继续观察。
 - **聚光灯强度**：初值 1500 流明未经验证，用调试面板的滑杆在真机上调定，然后把结果写回 `CakeSpotLight.Tuning.defaultIntensity`。

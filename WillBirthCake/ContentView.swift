@@ -74,7 +74,7 @@ struct ContentView: View {
             hint("Could not load the cake data:\n\(message)")
 
         case .searchingForPalm:
-            hint("Open your hand, palm up, and hold still")
+            hint("Show your open hand and hold still")
 
         case .cakePlaced:
             VStack(spacing: 12) {

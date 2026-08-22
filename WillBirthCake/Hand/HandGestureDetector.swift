@@ -2,16 +2,18 @@
 //  HandGestureDetector.swift
 //  WillBirthCake
 //
-//  Detects an open palm held face-up and reports where its centre is in world space.
+//  Locates the centre of a hand's palm in world space.
+//
+//  There is no pose test any more — no palm-up check, no finger-extension check.
+//  Seeing a hand with usable depth is the whole trigger.
 //
 //  iOS has no native hand-skeleton API — ARKit's hand tracking is visionOS only —
 //  so this runs Vision's 2D hand pose request over the AR frame and lifts the
 //  landmarks into 3D using the LiDAR depth map. See the constraints section of
 //  CLAUDE.md.
 //
-//  Two things here are geometry that must be verified on a device rather than
-//  reasoned about: the Vision→native-buffer orientation mapping in
-//  `nativeNormalizedPoint(from:)`, and the palm-normal sign per chirality.
+//  One piece here is geometry that must be verified on a device rather than reasoned
+//  about: the Vision→native-buffer orientation mapping in `nativeNormalizedPoint`.
 //
 
 import ARKit
@@ -22,30 +24,25 @@ import simd
 struct HandDetection {
     /// Palm centre in ARKit world space.
     let palmCentre: SIMD3<Float>
-    /// Palm normal in world space, pointing out of the back of the hand's palm side.
-    let palmNormal: SIMD3<Float>
-    /// Angle between the palm normal and world up, in degrees.
-    let tiltFromUp: Float
+    /// How many palm landmarks the centre was averaged from, out of `palmJoints`.
+    /// More is steadier; two is the minimum accepted.
+    let landmarkCount: Int
 }
 
-/// Why a frame did or did not produce a gesture.
+/// Why a frame did or did not locate a palm.
 ///
 /// DEBUG SCAFFOLDING — see Debug/HandJointDebugOverlay.swift for how to remove it.
 /// This exists because "the cake appeared in the wrong place" is not a diagnosis:
-/// a wrong orientation mapping, a flipped palm normal, a bad depth sample and a
-/// too-strict threshold all look identical from the outside. Naming the specific
-/// stage that rejected the frame separates them in one glance.
+/// a wrong orientation mapping and a bad depth sample look identical from the
+/// outside. Naming the stage that rejected the frame separates them in one glance.
 enum HandPoseStatus: Equatable {
     case noHandVisible
-    case fingersNotExtended
     case landmarksBelowConfidence
     /// Vision found the landmarks but the depth map had nothing usable there.
     case noDepthAtLandmarks
-    /// Palm found, but pointing too far from up. Carries the measured angle.
-    case tooTilted(degrees: Float)
-    /// Pose is good and the hold timer is running. Carries elapsed seconds.
-    case holding(seconds: TimeInterval, degrees: Float)
-    case fired(degrees: Float)
+    /// Palm located and the hold timer is running. Carries elapsed seconds.
+    case holding(seconds: TimeInterval, landmarks: Int)
+    case fired(landmarks: Int)
 }
 
 /// One processed frame's worth of output.
@@ -67,30 +64,31 @@ struct HandFrameResult {
 /// ARKit serialises those callbacks, so the mutable state below has a single writer.
 nonisolated final class HandGestureDetector {
 
-    /// Loosened across the board so the pose fires readily.
-    ///
-    /// Note that only the tilt tolerance gets *larger* to become more permissive —
-    /// the other three all have to move the other way. Doubling the hold duration,
-    /// the extension ratio or the confidence floor would each make the gesture
-    /// strictly harder to trigger, not easier.
     enum Tuning {
-        /// How far from straight-up the palm may point and still count as "face up".
-        /// At 80° a nearly vertical palm still passes, which is very forgiving —
-        /// tighten this first once the gesture is confirmed working on a device.
-        static let maxTiltFromUpDegrees: Float = 80
         /// Vision confidence floor for an individual joint.
         static let minJointConfidence: Float = 0.3
-        /// How long the pose must hold before it fires, in seconds. Stops a hand
-        /// passing through the pose from spawning a cake.
+        /// Fewest palm landmarks that must reproject before a centre is trusted.
+        /// One point is a single depth sample and lands wherever that sample is
+        /// wrong; two already average most of it out.
+        static let minPalmLandmarks = 2
+        /// How long a palm must stay visible before the cake is placed, in seconds.
+        ///
+        /// This is the last remaining guard and it is not a pose test — it is about
+        /// stability. The cake is world-anchored, so one noisy frame would strand it
+        /// somewhere wrong permanently and the only way back is the Place Again
+        /// button. A third of a second costs nothing and removes that.
         static let requiredHoldDuration: TimeInterval = 0.3
         /// Process every Nth frame. Vision at 60 fps is wasteful and starves the
-        /// render loop; ~20 Hz keeps the debug markers readable while the pose is
-        /// being tuned.
+        /// render loop; ~20 Hz keeps the debug markers readable.
         static let frameStride = 3
-        /// A finger counts as extended when the tip is at least this many times
-        /// further from the wrist than its middle joint.
-        static let extensionRatio: Float = 1.05
     }
+
+    /// Landmarks averaged to find the middle of the palm. The knuckles bound the
+    /// palm and the wrist anchors its base, so their mean sits in the hollow of the
+    /// hand rather than at its heel.
+    private static let palmJoints: [VNHumanHandPoseObservation.JointName] = [
+        .wrist, .indexMCP, .middleMCP, .ringMCP, .littleMCP,
+    ]
 
     private let request = VNDetectHumanHandPoseRequest()
     private var frameCounter = 0
@@ -102,8 +100,8 @@ nonisolated final class HandGestureDetector {
 
     /// Runs detection for one frame.
     ///
-    /// - Parameter includeAllJoints: reproject every landmark, not just the three the
-    ///   gesture needs. DEBUG SCAFFOLDING — costs 21 depth samples instead of 3.
+    /// - Parameter includeAllJoints: reproject every landmark, not just the palm.
+    ///   DEBUG SCAFFOLDING — costs 21 depth samples instead of 5.
     /// - Returns: `nil` when the frame was skipped by `frameStride`, meaning "no new
     ///   information" as distinct from "no hand", so a display can hold its last state.
     ///
@@ -141,8 +139,8 @@ nonisolated final class HandGestureDetector {
         }
 
         // Reprojected first, so the debug overlay still shows where the landmarks
-        // landed on the frames where the gesture is rejected — which are exactly the
-        // frames worth looking at.
+        // landed on the frames that get rejected — which are exactly the frames
+        // worth looking at.
         var joints: [VNHumanHandPoseObservation.JointName: SIMD3<Float>] = [:]
         if includeAllJoints {
             for (name, point) in points where point.confidence >= Tuning.minJointConfidence {
@@ -160,7 +158,6 @@ nonisolated final class HandGestureDetector {
         }
 
         let evaluation = evaluate(
-            observation: observation,
             points: points,
             frame: frame,
             depth: depth,
@@ -175,14 +172,14 @@ nonisolated final class HandGestureDetector {
             )
 
         case .accepted(let detection):
-            // Debounce: the pose has to survive a short hold before it counts.
+            // Debounce: the palm has to stay visible briefly before it counts.
             let now = Date()
             guard let start = poseHeldSince else {
                 poseHeldSince = now
                 return HandFrameResult(
                     joints: joints,
                     wristDepth: wristDepth,
-                    status: .holding(seconds: 0, degrees: detection.tiltFromUp),
+                    status: .holding(seconds: 0, landmarks: detection.landmarkCount),
                     detection: nil
                 )
             }
@@ -192,7 +189,7 @@ nonisolated final class HandGestureDetector {
                 return HandFrameResult(
                     joints: joints,
                     wristDepth: wristDepth,
-                    status: .holding(seconds: held, degrees: detection.tiltFromUp),
+                    status: .holding(seconds: held, landmarks: detection.landmarkCount),
                     detection: nil
                 )
             }
@@ -201,7 +198,7 @@ nonisolated final class HandGestureDetector {
             return HandFrameResult(
                 joints: joints,
                 wristDepth: wristDepth,
-                status: .fired(degrees: detection.tiltFromUp),
+                status: .fired(landmarks: detection.landmarkCount),
                 detection: detection
             )
         }
@@ -219,99 +216,36 @@ nonisolated final class HandGestureDetector {
     }
 
     private func evaluate(
-        observation: VNHumanHandPoseObservation,
         points: [VNHumanHandPoseObservation.JointName: VNRecognizedPoint],
         frame: ARFrame,
         depth: HandDepthSource,
         orientation: CGImagePropertyOrientation
     ) -> PoseEvaluation {
 
-        func point(_ joint: VNHumanHandPoseObservation.JointName) -> VNRecognizedPoint? {
-            guard let p = points[joint], p.confidence >= Tuning.minJointConfidence else {
-                return nil
-            }
-            return p
+        // No pose test: any hand whose palm can be located counts. Whatever subset
+        // of the palm landmarks Vision is confident about and depth can resolve gets
+        // averaged, rather than insisting on a fixed three — a finger crossing the
+        // wrist or a stray depth hole should not cost a detection.
+        let confident = Self.palmJoints.compactMap { name -> VNRecognizedPoint? in
+            guard let point = points[name],
+                  point.confidence >= Tuning.minJointConfidence else { return nil }
+            return point
         }
-
-        // The palm plane is spanned by wrist → index knuckle and wrist → little knuckle.
-        guard let wrist = point(.wrist),
-              let indexKnuckle = point(.indexMCP),
-              let littleKnuckle = point(.littleMCP) else {
+        guard confident.count >= Tuning.minPalmLandmarks else {
             return .rejected(.landmarksBelowConfidence)
         }
 
-        guard allFingersExtended(points: points) else {
-            return .rejected(.fingersNotExtended)
+        let positions = confident.compactMap {
+            unproject($0, frame: frame, depth: depth, orientation: orientation)
         }
-
-        guard let wrist3D = unproject(wrist, frame: frame, depth: depth, orientation: orientation),
-              let index3D = unproject(indexKnuckle, frame: frame, depth: depth, orientation: orientation),
-              let little3D = unproject(littleKnuckle, frame: frame, depth: depth, orientation: orientation)
-        else {
+        guard positions.count >= Tuning.minPalmLandmarks else {
             return .rejected(.noDepthAtLandmarks)
         }
 
-        let spanA = index3D - wrist3D
-        let spanB = little3D - wrist3D
-        let rawNormal = simd_cross(spanA, spanB)
-        guard simd_length(rawNormal) > 1e-6 else {
-            return .rejected(.noDepthAtLandmarks)
-        }
-
-        // The cross product's sign follows the order of the two knuckles, which
-        // mirrors between hands — so one chirality has to be flipped for the normal
-        // to mean "out of the palm" for both.
-        let sign: Float = observation.chirality == .right ? 1 : -1
-        let normal = simd_normalize(rawNormal) * sign
-
-        let up = SIMD3<Float>(0, 1, 0)
-        let tilt = acos(max(-1, min(1, simd_dot(normal, up)))) * 180 / .pi
-        guard tilt <= Tuning.maxTiltFromUpDegrees else {
-            return .rejected(.tooTilted(degrees: tilt))
-        }
-
-        // Centre of the palm rather than the wrist, so the cake sits in the hollow
-        // of the hand instead of at its heel.
-        let centre = (wrist3D + index3D + little3D) / 3
-
+        let centre = positions.reduce(SIMD3<Float>.zero, +) / Float(positions.count)
         return .accepted(
-            HandDetection(palmCentre: centre, palmNormal: normal, tiltFromUp: tilt)
+            HandDetection(palmCentre: centre, landmarkCount: positions.count)
         )
-    }
-
-    /// Checks all five fingers read as straight, using distance from the wrist:
-    /// on an extended finger the tip is clearly further out than the middle joint,
-    /// while on a curled one it folds back toward the palm.
-    private func allFingersExtended(
-        points: [VNHumanHandPoseObservation.JointName: VNRecognizedPoint]
-    ) -> Bool {
-        guard let wrist = points[.wrist], wrist.confidence >= Tuning.minJointConfidence else {
-            return false
-        }
-
-        let fingers: [(tip: VNHumanHandPoseObservation.JointName,
-                       middle: VNHumanHandPoseObservation.JointName)] = [
-            (.thumbTip, .thumbMP),
-            (.indexTip, .indexPIP),
-            (.middleTip, .middlePIP),
-            (.ringTip, .ringPIP),
-            (.littleTip, .littlePIP),
-        ]
-
-        for finger in fingers {
-            guard let tip = points[finger.tip], tip.confidence >= Tuning.minJointConfidence,
-                  let middle = points[finger.middle], middle.confidence >= Tuning.minJointConfidence
-            else { return false }
-
-            let tipDistance = hypot(tip.location.x - wrist.location.x,
-                                    tip.location.y - wrist.location.y)
-            let middleDistance = hypot(middle.location.x - wrist.location.x,
-                                       middle.location.y - wrist.location.y)
-            guard middleDistance > 1e-5,
-                  Float(tipDistance / middleDistance) >= Tuning.extensionRatio
-            else { return false }
-        }
-        return true
     }
 
     // MARK: - 2D → 3D

@@ -170,18 +170,13 @@ extension HandPoseStatus {
             return "No hand detected"
         case .landmarksBelowConfidence:
             return "Landmark confidence too low"
-        case .fingersNotExtended:
-            return "Fingers not extended"
         case .noDepthAtLandmarks:
             return "No depth at landmarks"
-        case .tooTilted(let degrees):
-            return String(format: "Palm %.0f° off vertical (limit %.0f°)",
-                          degrees, HandGestureDetector.Tuning.maxTiltFromUpDegrees)
-        case .holding(let seconds, let degrees):
-            return String(format: "Holding %.1f/%.1fs · tilt %.0f°",
-                          seconds, HandGestureDetector.Tuning.requiredHoldDuration, degrees)
-        case .fired(let degrees):
-            return String(format: "Fired · tilt %.0f°", degrees)
+        case .holding(let seconds, let landmarks):
+            return String(format: "Holding %.1f/%.1fs · %d palm points",
+                          seconds, HandGestureDetector.Tuning.requiredHoldDuration, landmarks)
+        case .fired(let landmarks):
+            return String(format: "Fired · %d palm points", landmarks)
         }
     }
 }
