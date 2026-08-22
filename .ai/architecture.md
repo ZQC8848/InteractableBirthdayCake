@@ -6,7 +6,7 @@
 
 ## 一个体素从生成到爆炸的完整流程
 
-1. **AR 会话启动** — `ARCakeCoordinator.attach(to:)` 配置 `ARWorldTrackingConfiguration`，深度来源按 `.smoothedSceneDepth` → `.sceneDepth` → `.personSegmentationWithDepth` 降级，全都不支持才进入 `.unsupportedDevice`。同时挂上 `SceneLighting` 的灯光，并**提前**把整个蛋糕 mesh 建好（约 7000 体素，等手势识别到再建会有可见卡顿）。
+1. **AR 会话启动** — `ARCakeCoordinator.attach(to:)` 配置 `ARWorldTrackingConfiguration`，深度来源按 `.smoothedSceneDepth` → `.sceneDepth` → `.personSegmentationWithDepth` 降级，全都不支持才进入 `.unsupportedDevice`。同时**提前**把整个蛋糕 mesh 建好（约 7000 体素，等手势识别到再建会有可见卡顿）。场景里**没有任何显式光源**，见下节。
 2. **逐帧手势识别** — ARKit 在后台串行队列 `visionQueue` 上回调 `session(_:didUpdate:)`，`HandGestureDetector` 每 3 帧跑一次 `VNDetectHumanHandPoseRequest`（60fps 下约 20Hz），判定五指伸展 + 掌心朝上。
 3. **3D 定位** — 把 Vision 的 2D 关键点（手腕、食指根、小指根）通过深度图 + 相机内参反投影成世界坐标。深度取窗口中位数（LiDAR 3×3，估算深度 5×5）——手在 256×192 的深度图里是个又小又噪的目标，单点采样一旦落在轮廓外就会把蛋糕放到几米之外；估算深度还要用人体分割蒙版过滤，蒙版外的值没有意义。掌心法线由两个跨掌向量叉乘得到，符号按 `chirality` 翻转。姿势要连续保持 0.3 秒才触发。
 4. **生成蛋糕** — `AnchorEntity(world:)` 锚在掌心位置，蛋糕挂上去，然后**关闭手势检测**。锚点和手部数据自此完全解耦，手移开蛋糕不动。
@@ -24,9 +24,19 @@
 | `Cake/ExplosionController.swift` | 碎片物理 | 冲量、**碎片**数量上限（与洞的大小解耦）、生命周期 |
 | `Hand/HandDepthSource.swift` | 深度来源抽象 | LiDAR 优先，退回人体分割估算深度 |
 | `Hand/HandGestureDetector.swift` | 手势 + 3D 定位 | `nonisolated`，跑在后台队列 |
-| `AR/SceneLighting.swift` | 主光 + 补光 | 只靠环境光会让所有体素面亮度一致，立方体退化成剪影 |
+| `Voxel/VoxelMeshBuilder.swift` 的 `FaceShadingTier` | 面向明暗烘焙 | 代替灯光解决"体素面无区分度"，见下节 |
 | `AR/ARCakeCoordinator.swift` | 会话与状态编排 | 主线程隔离；跨线程状态用 `OSAllocatedUnfairLock` |
 | `AR/ARViewContainer.swift` | SwiftUI 桥接 | 用 `ARView` 而非 `RealityView`，因为需要自定义 session 配置、session delegate、`ray(through:)` |
+
+## 为什么用面向烘焙而不是打光
+
+场景里没有定向光。体素面之间的明暗**烘在材质里**：每个源材质展开成四个变体，按面朝向选用——顶面 1.0、X 侧面 0.80、Z 侧面 0.66、底面 0.50（X 和 Z 分开是为了让转角处两面墙仍能分辨）。
+
+一开始的做法是加主光 + 补光，因为相机推出来的环境光柔和且近乎均匀，立方体六个面受光几乎一样，模型看着像剪影。但那是**用光照手段修一个材质层面的问题**，代价有两个：定向光的贡献叠加在环境光之上导致过曝，而 iOS 上 `DirectionalLightComponent.Shadow` 没有暴露软化参数，硬阴影调不动。
+
+烘焙让明暗关系变成**相对**的：房间多亮多暗，面与面的层次都在，也没有会过曝的投影光源。接触阴影交给 ARView 自带的 grounding shadow，那个本来就是为 AR 调过的。
+
+代价：明暗固定绑在世界轴上，模型旋转时不会跟着变。蛋糕是世界锚定且不旋转的，所以不受影响——**如果以后要让蛋糕转起来，这一条会穿帮**。
 
 ## 为什么隐面剔除是必需的而不是优化
 
@@ -47,7 +57,7 @@
 - **手势判定的阈值**：`maxTiltFromUpDegrees = 80`、`extensionRatio = 1.05`、`minJointConfidence = 0.3`、`requiredHoldDuration = 0.3s` 目前全部**刻意放宽**以便先看到它能触发。80° 意味着接近竖直的手掌也算「朝上」，确认识别正常之后应该先把这一条收紧。
 - **人体分割估算深度在只有一只手入镜时的质量**——分割网络主要是为整个人训练的。
 - **单次爆炸 200 个刚体**会不会掉帧。这是目前最大的性能风险，掉帧就先调小 `maxDebrisPerBlast`。
-- **光照**：`SceneLighting` 的主光/补光强度（12000 / 3000 lux）是拍脑袋的初值，AR 场景合成在明亮的相机画面之上，需要实机看曝光是否合适。
+- **面向明暗的四档系数**（1.0 / 0.80 / 0.66 / 0.50）是初值，实机看层次够不够。整体太暗的话调 `arView.environment.lighting.intensityExponent`，**不要加回定向光**——那正是过曝和硬阴影的来源。
 - **蛋糕物理尺寸** 16.3 × 14.3 × 16.3 cm（`voxelSize = 0.0065`）在掌心里看着合不合适。
 
 ## 相关决策

@@ -121,12 +121,10 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
 
         updateCaptureOrientation()
 
-        // Anchored at the world origin rather than to the cake: directional lights
-        // only care about their orientation, and this way the rig survives a reset.
-        let lightAnchor = AnchorEntity(world: SIMD3<Float>.zero)
-        lightAnchor.addChild(SceneLighting.makeRig())
-        arView.scene.addAnchor(lightAnchor)
-
+        // No explicit lights. Face separation is baked into the voxel materials by
+        // `FaceShadingTier`, so the scene needs only the environment lighting ARKit
+        // derives from the camera — which keeps the cake matched to the real room and
+        // cannot overexpose it. ARView's grounding shadow is left on for contact.
         debugOverlay.attach(to: arView.scene) // DEBUG:
         gestureArmed.withLock { $0 = true }
         phase = .searchingForPalm

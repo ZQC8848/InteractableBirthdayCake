@@ -65,12 +65,21 @@ final class CakeEntity: Entity {
 
         // Build the material palette once. `materialsByID` applies the last-wins rule
         // for the file's duplicated ids — see VoxelSceneData.
+        //
+        // Each source material expands into one variant per face-shading tier, so a
+        // face's brightness is chosen by which material it is routed to. See
+        // `FaceShadingTier` for why the shading is baked here rather than lit.
         let table = data.materialsByID
         let sortedIDs = table.keys.sorted()
+        let tierCount = FaceShadingTier.allCases.count
         self.materialSlots = Dictionary(
-            uniqueKeysWithValues: sortedIDs.enumerated().map { ($1, UInt32($0)) }
+            uniqueKeysWithValues: sortedIDs.enumerated().map { ($1, UInt32($0 * tierCount)) }
         )
-        self.materials = sortedIDs.map { Self.makeMaterial(from: table[$0]!) }
+        self.materials = sortedIDs.flatMap { id in
+            FaceShadingTier.allCases
+                .sorted { $0.index < $1.index }
+                .map { Self.makeMaterial(from: table[id]!, brightness: $0.brightness) }
+        }
 
         self.originOffset = SIMD3<Float>(
             Float(grid.minCoord.x + grid.maxCoord.x + 1) / 2,
@@ -90,23 +99,37 @@ final class CakeEntity: Entity {
         fatalError("Use init(scene:voxelSize:)")
     }
 
-    private static func makeMaterial(from record: VoxelMaterialRecord) -> RealityKit.Material {
+    private static func makeMaterial(
+        from record: VoxelMaterialRecord,
+        brightness: Float
+    ) -> RealityKit.Material {
+        // Scaled in sRGB rather than linear. Physically that overstates the
+        // darkening, which is the point: it yields the crisp, slightly graphic
+        // face separation the voxel look wants.
         let color = UIColor(
-            red: CGFloat(record.r), green: CGFloat(record.g), blue: CGFloat(record.b), alpha: 1
+            red: CGFloat(record.r * brightness),
+            green: CGFloat(record.g * brightness),
+            blue: CGFloat(record.b * brightness),
+            alpha: 1
         )
         var material = PhysicallyBasedMaterial()
         material.baseColor = .init(tint: color)
         material.roughness = .init(floatLiteral: record.roughness)
         material.metallic = .init(floatLiteral: record.metallic)
         if record.emissive > 0 {
-            material.emissiveColor = .init(color: color)
+            // Emissive is left at full strength: a candle flame is its own light
+            // source, so the face it happens to point along should not dim it.
+            let emissiveColour = UIColor(
+                red: CGFloat(record.r), green: CGFloat(record.g), blue: CGFloat(record.b), alpha: 1
+            )
+            material.emissiveColor = .init(color: emissiveColour)
             material.emissiveIntensity = record.emissive * record.emissiveIntensity
         }
         return material
     }
 
-    private func slot(for materialID: Int) -> UInt32 {
-        materialSlots[materialID] ?? 0
+    private func slot(for materialID: Int, tier: FaceShadingTier) -> UInt32 {
+        (materialSlots[materialID] ?? 0) + UInt32(tier.index)
     }
 
     // MARK: - Geometry
@@ -129,7 +152,7 @@ final class CakeEntity: Entity {
             voxelSize: voxelSize,
             originOffset: originOffset,
             occluder: { [grid] coord in grid.isOccupied(coord) },
-            materialIndex: { [weak self] id in self?.slot(for: id) ?? 0 }
+            materialIndex: { [weak self] id, tier in self?.slot(for: id, tier: tier) ?? 0 }
         )
 
         guard let mesh else {
@@ -160,7 +183,7 @@ final class CakeEntity: Entity {
             voxelSize: voxelSize,
             originOffset: originOffset,
             occluder: { textCoords.contains($0) },
-            materialIndex: { [weak self] id in self?.slot(for: id) ?? 0 }
+            materialIndex: { [weak self] id, tier in self?.slot(for: id, tier: tier) ?? 0 }
         )
         guard let mesh else { return }
         textRoot.addChild(ModelEntity(mesh: mesh, materials: materials))
@@ -208,8 +231,11 @@ final class CakeEntity: Entity {
         grid.localCentre(of: coord)
     }
 
+    /// A debris cube is one solid colour on all six sides, so it cannot use the
+    /// per-face tiers. It takes the mid tier, which reads as neither a lit top nor a
+    /// shadowed underside as it tumbles.
     func material(for materialID: Int) -> RealityKit.Material {
-        materials[Int(slot(for: materialID))]
+        materials[Int(slot(for: materialID, tier: .sideX))]
     }
 
     var destructibleVoxelCount: Int {
