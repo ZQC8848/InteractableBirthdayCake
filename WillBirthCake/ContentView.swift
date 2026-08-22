@@ -11,55 +11,81 @@ struct ContentView: View {
 
     @StateObject private var coordinator = ARCakeCoordinator()
 
+    /// DEBUG SCAFFOLDING — see Debug/HandJointDebugOverlay.swift.
+    @State private var showDebugPanel = false
+
     var body: some View {
-        ZStack(alignment: .bottom) {
+        ZStack {
             ARViewContainer(coordinator: coordinator)
                 .edgesIgnoringSafeArea(.all)
 
-            VStack(spacing: 10) {
+            VStack(spacing: 0) {
+                HStack(alignment: .top) {
+                    debugCorner // DEBUG: remove with HandJointDebugOverlay.swift
+                    Spacer(minLength: 0)
+                }
+                Spacer(minLength: 0)
                 statusBar
-                handDebugPanel // DEBUG: remove with HandJointDebugOverlay.swift
             }
             .padding(.horizontal, 20)
+            .padding(.top, 8)
             .padding(.bottom, 40)
         }
     }
 
+    // MARK: - Debug panel
+
+    /// DEBUG SCAFFOLDING. Collapsed to a single button so the instrumentation stays
+    /// available without sitting on top of the experience it exists to check.
+    private var debugCorner: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                showDebugPanel.toggle()
+                coordinator.setDebugPanelOpen(showDebugPanel)
+            } label: {
+                Image(systemName: showDebugPanel ? "xmark" : "ladybug.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
+                    .background(.black.opacity(0.55), in: .circle)
+            }
+
+            if showDebugPanel {
+                handDebugPanel
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: showDebugPanel)
+    }
+
     /// DEBUG SCAFFOLDING. Shows what the hand detector actually saw this frame.
     /// The markers alone cannot tell you *why* a pose was rejected — this line can,
-    /// and the wrist distance separates "landmarks in the wrong place" from
-    /// "landmarks in the right place at the wrong depth".
-    @ViewBuilder
+    /// and the wrist distance separates "landmarks in the right place but at the
+    /// wrong depth" from "landmarks in the wrong place".
     private var handDebugPanel: some View {
-        VStack(spacing: 6) {
-            Toggle("Show hand joint markers", isOn: Binding(
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Hand joint markers", isOn: Binding(
                 get: { coordinator.showHandJoints },
                 set: { coordinator.setHandJointsVisible($0) }
             ))
             .font(.caption.weight(.semibold))
+            .fixedSize()
 
-            if coordinator.showHandJoints {
-                Text(coordinator.handStatus)
-                    .font(.caption.monospaced())
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Text(coordinator.handWristDepth.map {
-                    String(format: "Wrist %.2f m from camera", $0)
-                } ?? "Wrist — from camera")
-                    .font(.caption.monospaced())
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Text("Depth source: \(coordinator.depthSourceName)")
-                    .font(.caption.monospaced())
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
+            Text(coordinator.handStatus)
+            Text(coordinator.handWristDepth.map {
+                String(format: "Wrist %.2f m from camera", $0)
+            } ?? "Wrist — from camera")
+            Text("Depth source: \(coordinator.depthSourceName)")
         }
+        .font(.caption.monospaced())
         .foregroundStyle(.white)
+        .frame(maxWidth: 260, alignment: .leading)
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(.black.opacity(0.55), in: .rect(cornerRadius: 12))
+        .background(.black.opacity(0.6), in: .rect(cornerRadius: 12))
     }
+
+    // MARK: - Status
 
     @ViewBuilder
     private var statusBar: some View {

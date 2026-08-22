@@ -28,15 +28,15 @@
 
 ## 临时调试脚手架（验证完就删）
 
-手部关节标记 + 状态读数，仅用于上面这轮验证。
+手部关节标记 + 状态读数。**默认收起**：左上角一个小按钮，点开才展开面板，再点收起；关节标记默认关闭，要在面板里单独打开。面板关着的时候检测器不会为它多跑任何东西。
 
 **删除方法**：
 1. 删掉 `WillBirthCake/Debug/HandJointDebugOverlay.swift` 整个文件
-2. 删掉 `ARCakeCoordinator.swift` 里所有标了 `// DEBUG:` 的行，以及 `debugOverlay` / `debugArmed` / `showHandJoints` / `handStatus` / `handWristDepth` / `setHandJointsVisible(_:)` 这些成员
-3. 删掉 `ContentView.swift` 里的 `handDebugPanel`
+2. 删掉 `ARCakeCoordinator.swift` 里所有标了 `// DEBUG:` 的行，以及 `DebugFlags` / `debugOverlay` / `showHandJoints` / `handStatus` / `handWristDepth` / `depthSourceName` / `setHandJointsVisible(_:)` / `setDebugPanelOpen(_:)` 这些成员
+3. 删掉 `ContentView.swift` 里的 `debugCorner` 和 `handDebugPanel`
 4. `HandGestureDetector.swift` 里：`process` 的 `includeAllJoints` 参数、`HandFrameResult` 的 `joints` 和 `wristDepth` 字段、以及整个 `HandPoseStatus` 枚举
 
-注意 `gestureArmed` 和 `debugArmed` 是**故意拆成两个**的：蛋糕放置后手势要停止触发，但标记要继续跟踪，这样才能对着已经放好的蛋糕继续检查手部识别。删除脚手架时把 `debugArmed` 一并去掉，`session(_:didUpdate:)` 就退回只由 `gestureArmed` 控制。
+注意 `gestureArmed` 和 `DebugFlags` 是**故意分开**的：蛋糕放置后手势要停止触发，但标记要继续跟踪，这样才能对着已经放好的蛋糕继续检查手部识别。`DebugFlags` 内部又分 `panelOpen` 和 `markers` 两个标志，因为开销不同——读数只要检测器在跑，标记还要额外反投影全部 21 个关键点（掌心只需 5 个）。删除脚手架时整个去掉，`session(_:didUpdate:)` 就退回只由 `gestureArmed` 控制。
 
 ## 进行中 / 待定
 

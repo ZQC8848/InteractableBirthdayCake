@@ -33,8 +33,9 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
     @Published private(set) var phase: Phase = .startingSession
     @Published private(set) var remainingVoxels: Int = 0
 
-    /// DEBUG: hand-landmark markers and the live readout beside them.
-    @Published var showHandJoints: Bool = true
+    /// DEBUG: hand-landmark markers and the live readout beside them. Off by
+    /// default — the panel is opened deliberately, not left running.
+    @Published var showHandJoints: Bool = false
     @Published private(set) var handStatus: String = "—"
     @Published private(set) var handWristDepth: Float?
     /// DEBUG: which depth path this device ended up on. Worth surfacing — the two
@@ -59,14 +60,26 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
     /// Only ever touched from `visionQueue`, which ARKit serializes for us.
     nonisolated(unsafe) private let detector = HandGestureDetector()
 
+    /// DEBUG: what the instrumentation currently wants. Two flags rather than one
+    /// because they cost different things — the readout only needs the detector to
+    /// run, while the markers additionally reproject all 21 landmarks instead of the
+    /// 5 the palm needs.
+    /// `nonisolated` because the vision queue reads it — same default-isolation trap
+    /// as HandGestureDetector.
+    nonisolated struct DebugFlags {
+        var panelOpen = false
+        var markers = false
+        var wantsFrames: Bool { panelOpen || markers }
+    }
+
     /// Shared between the main actor (writer) and the vision queue (reader), so they
     /// need real synchronisation rather than unguarded flags.
     ///
-    /// `gestureArmed` and `debugArmed` are separate on purpose: once the cake is
+    /// `gestureArmed` and the debug flags are separate on purpose: once the cake is
     /// placed the gesture must stop firing, but the markers should keep tracking so
     /// the hand can still be checked against a cake that is already in the scene.
     private let gestureArmed = OSAllocatedUnfairLock(initialState: false)
-    private let debugArmed = OSAllocatedUnfairLock(initialState: true)
+    private let debugFlags = OSAllocatedUnfairLock(initialState: DebugFlags())
     private let captureOrientation = OSAllocatedUnfairLock<CGImagePropertyOrientation>(
         initialState: .right
     )
@@ -126,6 +139,7 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
         // The spot light is created with the cake, not here — it is parented to the
         // cake's anchor so it frames the cake wherever the palm turned out to be.
         debugOverlay.attach(to: arView.scene) // DEBUG:
+        debugOverlay.isHidden = !showHandJoints // DEBUG:
         gestureArmed.withLock { $0 = true }
         phase = .searchingForPalm
     }
@@ -214,10 +228,17 @@ final class ARCakeCoordinator: NSObject, ObservableObject {
     /// DEBUG: mirrors the SwiftUI toggle into the vision queue and the scene.
     func setHandJointsVisible(_ visible: Bool) {
         showHandJoints = visible
-        debugArmed.withLock { $0 = visible }
+        debugFlags.withLock { $0.markers = visible }
         debugOverlay.isHidden = !visible
-        if !visible {
-            debugOverlay.clear()
+        if !visible { debugOverlay.clear() }
+    }
+
+    /// DEBUG: the panel being open is enough to keep the readout live, even with the
+    /// markers off — otherwise opening it would show a frozen line from whenever the
+    /// markers were last on.
+    func setDebugPanelOpen(_ open: Bool) {
+        debugFlags.withLock { $0.panelOpen = open }
+        if !open {
             handStatus = "—"
             handWristDepth = nil
         }
@@ -231,11 +252,11 @@ extension ARCakeCoordinator: ARSessionDelegate {
     /// Called on `visionQueue`, never the main actor.
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let wantsGesture = gestureArmed.withLock { $0 }
-        let wantsMarkers = debugArmed.withLock { $0 } // DEBUG:
+        let debug = debugFlags.withLock { $0 } // DEBUG:
 
         // Keep running while *either* consumer wants frames: after the cake is placed
-        // the gesture is disarmed but the markers should still track. DEBUG:
-        guard wantsGesture || wantsMarkers else { return }
+        // the gesture is disarmed but the instrumentation should still track. DEBUG:
+        guard wantsGesture || debug.wantsFrames else { return }
         let orientation = captureOrientation.withLock { $0 }
 
         // A nil result means the frame was skipped by `frameStride`, not that the
@@ -243,12 +264,14 @@ extension ARCakeCoordinator: ARSessionDelegate {
         guard let result = detector.process(
             frame: frame,
             orientation: orientation,
-            includeAllJoints: wantsMarkers // DEBUG:
+            includeAllJoints: debug.markers // DEBUG:
         ) else { return }
 
         Task { @MainActor in
-            if wantsMarkers { // DEBUG:
+            if debug.markers { // DEBUG:
                 self.debugOverlay.update(positions: result.joints)
+            }
+            if debug.wantsFrames { // DEBUG:
                 self.handStatus = result.status.debugSummary
                 self.handWristDepth = result.wristDepth
             }

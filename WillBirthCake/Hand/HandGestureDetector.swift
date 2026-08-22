@@ -157,8 +157,16 @@ nonisolated final class HandGestureDetector {
             }
         }
 
+        // Wanted for the readout even when the markers are off, and worth the one
+        // extra depth sample: without it, opening the panel with markers off would
+        // show a blank distance, which reads as "no depth" rather than "not asked".
+        let wristWorld = joints[.wrist] ?? points[.wrist].flatMap { point in
+            point.confidence >= Tuning.minJointConfidence
+                ? unproject(point, frame: frame, depth: depth, orientation: orientation)
+                : nil
+        }
         let cameraPosition = frame.camera.transform.columns.3
-        let wristDepth = joints[.wrist].map {
+        let wristDepth = wristWorld.map {
             simd_distance($0, SIMD3<Float>(cameraPosition.x, cameraPosition.y, cameraPosition.z))
         }
 

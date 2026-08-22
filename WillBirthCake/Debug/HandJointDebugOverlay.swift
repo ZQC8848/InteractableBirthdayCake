@@ -13,10 +13,16 @@
 //  that; a skeleton makes it obvious, because a mirrored hand has the thumb on the
 //  wrong side and a rotated one points the wrong way.
 //
-//  TO REMOVE, delete this file and the four call sites marked `DEBUG:` in
-//  ARCakeCoordinator.swift, plus the debug section of ContentView.swift and the
-//  `includeAllJoints` / `HandFrameResult.joints` / `HandFrameResult.wristDepth` /
-//  `HandPoseStatus` members of HandGestureDetector.swift.
+//  The panel is collapsed behind a button in the top-left corner and the markers
+//  default to off, so none of this costs anything until it is opened.
+//
+//  TO REMOVE, delete this file, the lines marked `DEBUG:` in ARCakeCoordinator.swift
+//  along with `DebugFlags` / `debugOverlay` / `showHandJoints` / `handStatus` /
+//  `handWristDepth` / `depthSourceName` / `setHandJointsVisible` /
+//  `setDebugPanelOpen`, the `debugCorner` and `handDebugPanel` sections of
+//  ContentView.swift, and the `includeAllJoints` / `HandFrameResult.joints` /
+//  `HandFrameResult.wristDepth` / `HandPoseStatus` members of
+//  HandGestureDetector.swift.
 //
 
 import RealityKit
