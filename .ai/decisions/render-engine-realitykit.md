@@ -20,11 +20,13 @@
 
 | 假设 | 状态 | 依据 / 需要的验证 |
 |---|---|---|
-| RealityKit 的 `MeshDescriptor` 分 chunk 合并 + 局部重建方案，在预期体素规模（上千个）下渲染性能可接受 | 未验证 | 需要拿到真实体素数据后，在真机上实测合并 mesh 的构建耗时和渲染帧率 |
+| RealityKit 的 `MeshDescriptor` 分 chunk 合并 + 局部重建方案，在预期体素规模（上千个）下渲染性能可接受 | 部分验证 | 2026-08-22：真实数据 6805 个体素，隐面剔除后只剩 2886 个面（5772 三角形），对现代 iOS GPU 是很轻的负载；一次爆炸平均只弄脏 7 个 chunk。**但真机帧率还没测过。** |
 
 ## 接受的代价
 
-放弃了 SceneKit 更丰富的现成范例和更细粒度的手动节点控制。如果后续想用 RealityKit 原生 GPU instancing 来提升渲染性能，还需要接受更高的最低 iOS 版本要求（iOS 26+，见 `CLAUDE.md` 里的约束说明），这是在 [device-scope-lidar-only.md](device-scope-lidar-only.md) 的 LiDAR 机型限制之外的额外版本约束。
+放弃了 SceneKit 更丰富的现成范例和更细粒度的手动节点控制。
+
+原本还担心"想用 RealityKit 原生 GPU instancing 就得抬高最低 iOS 版本"，但这个顾虑不成立：工程的 `IPHONEOS_DEPLOYMENT_TARGET` 本来就是 26.2，`LowLevelMesh`/`MeshInstancesComponent` 随时可用。目前没有用它们——手写的 chunk 合并 + 隐面剔除已经把几何量压到 5772 三角形，没有需要 instancing 来解决的问题。
 
 ## 什么情况下会推翻这个决定
 

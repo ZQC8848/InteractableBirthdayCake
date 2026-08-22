@@ -1,0 +1,194 @@
+//
+//  ARCakeCoordinator.swift
+//  WillBirthCake
+//
+//  Owns the AR session and wires the two interactions together:
+//  open palm → spawn the cake, tap → blast a hole in it.
+//
+//  Concurrency note: this target compiles with `SWIFT_DEFAULT_ACTOR_ISOLATION =
+//  MainActor`, so everything here is main-actor isolated unless marked otherwise.
+//  ARKit delivers frames on `visionQueue` (a background serial queue) to keep Vision
+//  off the render loop, which is why the frame callback is `nonisolated` and hops
+//  back to the main actor before touching the scene.
+//
+
+import ARKit
+import Combine
+import Foundation
+import RealityKit
+import UIKit
+import os
+
+@MainActor
+final class ARCakeCoordinator: NSObject, ObservableObject {
+
+    enum Phase: Equatable {
+        case startingSession
+        case unsupportedDevice
+        case loadFailed(String)
+        case searchingForPalm
+        case cakePlaced
+    }
+
+    @Published private(set) var phase: Phase = .startingSession
+    @Published private(set) var remainingVoxels: Int = 0
+
+    private weak var arView: ARView?
+    private var cake: CakeEntity?
+    private var explosions: ExplosionController?
+    private var cakeAnchor: AnchorEntity?
+
+    /// Serial queue for ARKit delegate callbacks. Vision runs here so a ~30 ms
+    /// inference never stalls rendering.
+    private let visionQueue = DispatchQueue(label: "com.willbirthcake.vision")
+
+    /// Only ever touched from `visionQueue`, which ARKit serializes for us.
+    nonisolated(unsafe) private let detector = HandGestureDetector()
+
+    /// Shared between the main actor (writer) and the vision queue (reader), so it
+    /// needs real synchronisation rather than an unguarded flag.
+    private let detectionEnabled = OSAllocatedUnfairLock(initialState: false)
+    private let captureOrientation = OSAllocatedUnfairLock<CGImagePropertyOrientation>(
+        initialState: .right
+    )
+
+    // MARK: - Setup
+
+    func attach(to arView: ARView) {
+        self.arView = arView
+
+        guard ARWorldTrackingConfiguration.isSupported else {
+            phase = .unsupportedDevice
+            return
+        }
+
+        do {
+            let data = try VoxelSceneData.load()
+            // Built eagerly, while the user is still finding a surface: meshing
+            // ~7000 voxels takes long enough to be a visible hitch if it happens at
+            // the moment the palm is recognised.
+            let cake = try CakeEntity(scene: data)
+            self.cake = cake
+            self.remainingVoxels = cake.destructibleVoxelCount
+        } catch {
+            phase = .loadFailed(error.localizedDescription)
+            return
+        }
+
+        let configuration = ARWorldTrackingConfiguration()
+        configuration.planeDetection = [.horizontal]
+        configuration.environmentTexturing = .automatic
+
+        // Depth is what lifts Vision's 2D landmarks into world space. The project is
+        // scoped to LiDAR devices precisely so this is available — see
+        // .ai/decisions/device-scope-lidar-only.md.
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+            configuration.frameSemantics.insert(.smoothedSceneDepth)
+        } else if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            configuration.frameSemantics.insert(.sceneDepth)
+        } else {
+            phase = .unsupportedDevice
+            return
+        }
+
+        arView.session.delegateQueue = visionQueue
+        arView.session.delegate = self
+        arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+
+        updateCaptureOrientation()
+        detectionEnabled.withLock { $0 = true }
+        phase = .searchingForPalm
+    }
+
+    func updateCaptureOrientation() {
+        let interfaceOrientation = arView?.window?.windowScene?
+            .effectiveGeometry.interfaceOrientation ?? .portrait
+        let mapped = interfaceOrientation.visionImageOrientation
+        captureOrientation.withLock { $0 = mapped }
+    }
+
+    // MARK: - Interactions
+
+    /// Places the cake at a world position and stops looking for hands.
+    ///
+    /// The cake is parented to a plain world anchor, not to anything hand-derived:
+    /// once placed it stays put even as the hand moves away, which is the whole
+    /// point of anchoring it rather than attaching it.
+    private func placeCake(at position: SIMD3<Float>) {
+        guard let arView, let cake, cakeAnchor == nil else { return }
+
+        detectionEnabled.withLock { $0 = false }
+
+        let anchor = AnchorEntity(world: position)
+        anchor.addChild(cake)
+        arView.scene.addAnchor(anchor)
+        cakeAnchor = anchor
+
+        explosions = ExplosionController(cake: cake, debrisRoot: anchor)
+        phase = .cakePlaced
+    }
+
+    /// Fires a ray from the tap into the scene and blasts whatever voxel it hits.
+    func handleTap(at screenPoint: CGPoint) {
+        guard let arView, let explosions, phase == .cakePlaced else { return }
+        guard let ray = arView.ray(through: screenPoint) else { return }
+
+        let destroyed = explosions.fireRay(origin: ray.origin, direction: ray.direction)
+        if destroyed > 0 {
+            remainingVoxels = cake?.destructibleVoxelCount ?? 0
+        }
+    }
+
+    /// Clears the cake so the palm gesture can place a fresh one.
+    func reset() {
+        guard let arView, let data = try? VoxelSceneData.load() else { return }
+
+        cakeAnchor.map { arView.scene.removeAnchor($0) }
+        cakeAnchor = nil
+        explosions = nil
+
+        // Rebuilt from scratch: the grid is mutated in place by explosions, so the
+        // old entity cannot be reused.
+        guard let fresh = try? CakeEntity(scene: data) else { return }
+        cake = fresh
+        remainingVoxels = fresh.destructibleVoxelCount
+
+        detector.reset()
+        detectionEnabled.withLock { $0 = true }
+        phase = .searchingForPalm
+    }
+}
+
+// MARK: - ARSessionDelegate
+
+extension ARCakeCoordinator: ARSessionDelegate {
+
+    /// Called on `visionQueue`, never the main actor.
+    nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        guard detectionEnabled.withLock({ $0 }) else { return }
+        let orientation = captureOrientation.withLock { $0 }
+
+        guard let detection = detector.process(frame: frame, orientation: orientation) else {
+            return
+        }
+
+        Task { @MainActor in
+            // The gesture may have already fired while this hop was in flight.
+            guard self.cakeAnchor == nil else { return }
+            self.placeCake(at: detection.palmCentre)
+        }
+    }
+}
+
+private extension UIInterfaceOrientation {
+    /// Orientation to hand Vision for a frame from ARKit's rear camera, whose native
+    /// buffer is landscape.
+    var visionImageOrientation: CGImagePropertyOrientation {
+        switch self {
+        case .portraitUpsideDown: return .left
+        case .landscapeLeft: return .down
+        case .landscapeRight: return .up
+        default: return .right
+        }
+    }
+}
